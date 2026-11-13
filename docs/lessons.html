@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engineering notes - Argus</title>
+<meta name="description" content="What it took to make the rig work: the problems found, how they were fixed, and what is still unverified.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html" aria-current="page">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#bringing-up-the-hardware">Bringing up the hardware</a><a href="#timestamps-that-told-the-truth">Timestamps that told the truth</a><a href="#hardware-frame-sync">Hardware frame sync</a><a href="#bugs-found-by-testing-the-new-features">Bugs found by testing the new features</a><a href="#principles-that-came-out-of-it">Principles that came out of it</a><a href="#not-yet-verified-on-hardware">Not yet verified on hardware</a></aside><article class="content"><div class="kicker">Engineering notes</div>
+<h1>What it took</h1>
+<p class="lead">Most of the work on this rig was not writing features; it was finding out why something that looked fine was not. These are the problems the team hit, how each was found, and what changed. Several of them produce no error message at all.</p>
+
+<h2 id="bringing-up-the-hardware">Bringing up the hardware</h2>
+<dl class="defs">
+  <dt>The vendor installer did not finish</dt>
+  <dd>The camera driver installer failed in two places on this L4T release (a device-tree tool looking for DTBs in the wrong folder, and an abort part-way through). Both steps were completed by small repair scripts kept with the rig. The module autoload list also had to drop two modules that do not exist on Orin, because listing them fails the module-load service.</dd>
+  <dt>A system update silently removed every camera</dt>
+  <dd>An L4T package update overwrote the DTB the camera overlay was merged into, and replaced the vendor's patched camera modules. Fix: merge the overlay into a separately named DTB that no package owns, and a script that reinstalls and checks the modules.</dd>
+  <dt>V4L2 lies about the format</dt>
+  <dd>Asking for 2048 wide returns success and 1920. Every format is now read back and compared, not trusted.</dd>
+  <dt>Node numbers move</dt>
+  <dd><code>/dev/videoN</code> follows probe order; a webcam or one failed probe renumbers everything, and the bus path is shared by two nodes. Cameras are identified by the sensor's I²C bus and address in the device name, and physical positions are confirmed one lens at a time with <code>avrig wizard</code>.</dd>
+  <dt>The deserializer board failed</dt>
+  <dd>Both deserializers progressively stopped answering on their camera I²C buses over several days — a hardware fault that looked like a software regression. Reading the persistent kernel log across boots bounded when it started; the board was serviced.</dd>
+  <dt>GNSS jammed by a USB 3 hub</dt>
+  <dd>Zero satellites with the antenna “OK”. The receiver's RF report showed a pinned-low AGC and a jamming indicator of 190/255: USB 3 SuperSpeed noise on the L1 band. Moving the receiver off the hub fixed it — and is why Argus now watches the receiver's RF report live.</dd>
+  <dt>The PPS line never fired</dt>
+  <dd>The GNSS timepulse is configured and the host GPIO interrupt is armed, but no edge has ever arrived (wiring or pin-mux). Meanwhile <code>/dev/pps0</code> is the kernel's synthetic test source: binding to it would have produced perfect, fictitious sync. Absolute time comes from NTP until the GNSS clock is installed with a fix.</dd>
+</dl>
+
+<h2 id="timestamps-that-told-the-truth">Timestamps that told the truth</h2>
+<p>The single most important finding. Early capture tools used GStreamer's <code>v4l2src</code> and recorded “driver timestamps”. They did not: because the Tegra's TSC counts from power-on, <code>v4l2src</code> judged the stamps implausible and silently replaced them with dequeue time. On a quiet machine that looked fine (58 µs median spread); under load the same hardware read 0.3–0.6 ms median and 3.5–5 ms p95.</p>
+<p>Reading the driver timestamps directly from six concurrent captures showed the truth: ~15 µs per-frame jitter and a 30 µs median spread. The capture core was rewritten to dequeue V4L2 buffers itself and hand GStreamer only the encoding, with the true capture time as PTS. Every sync number in this documentation comes from driver timestamps.</p>
+
+<h2 id="hardware-frame-sync">Hardware frame sync</h2>
+<ol>
+  <li><strong>First attempt: the streams stalled.</strong> The trigger switch was on external with nothing wired, so the sensors waited for edges that never came. Back on internal, the trigger worked.</li>
+  <li><strong>Then: drops.</strong> On the original deserializer board the trigger missed edges — ~8 dropped frames per minute, always two-frame jumps clustered per deserializer, which pointed at the trigger, not the encoder or disk. After the board was serviced: 0 drops in 2 minutes.</li>
+  <li><strong>Then: the cold-boot failure.</strong> A boot service that set sync before anything had streamed left four of six cameras with no frames and a restart storm. The control experiment — same boot, sync off — was clean. The successful measurements had all been taken on a <em>warm</em> rig, and a one-camera smoke test does not reproduce the failure.</li>
+  <li><strong>The fix: warm start, verify, fail visibly.</strong> Stream all six free-running first, then set sync, read it back and verify the lock; at boot, retry once and otherwise leave the rig free-running with preflight blocking recording. A camera left dead is worse than an unsynced rig that says so.</li>
+</ol>
+
+<h2 id="bugs-found-by-testing-the-new-features">Bugs found by testing the new features</h2>
+<p>Every live feature was A/B-tested on the real rig before it was enabled by default. These are the problems that testing caught.</p>
+<div class="table"><table>
+<tr><th>Problem</th><th>How it showed</th><th>Fix</th></tr>
+<tr><td>A valve on the mount-guard branch, closed while parked</td><td>On the real rig it stalled whole recordings: over 1,000 drops per camera, LOCKED for only 3 s. (The rig's earlier engine had hit the same GStreamer behaviour: a sink behind a closed valve never finishes its state change.)</td><td>Valve removed; the guard skips frames in its own code instead. Simulated-camera tests now record with the branch on, so a stall fails a test.</td></tr>
+<tr><td>A wrong function signature in the guard's speed lookup</td><td>A <code>TypeError</code> raised inside the GStreamer streaming thread on every frame cost 1–2 dropped frames under heavy load.</td><td>Fixed, and the frame callback can no longer raise into a camera thread (errors are caught and rate-limited in the log).</td></tr>
+<tr><td>Mount guard used +16 % of a core while idle</td><td>A/B CPU measurement</td><td>The IMU history was being copied for every job. Now a ring buffer, cheap classification on arrival, vectorised gating: +7–8 % total, 0.0 % while parked.</td></tr>
+<tr><td>Mount guard false alarm</td><td>On rendered drives, single frame pairs had ~2.5° of noise in the rotation axis</td><td>Weights that grow with the rotation angle, more evidence before learning, a significance test (change − 2 standard errors &gt; threshold) and three consecutive evaluations.</td></tr>
+<tr><td>Segfault with parallel model workers</td><td>Crashes as soon as two cameras ran inference</td><td>On Jetson, CPU code must not touch managed memory while any GPU kernel of the process runs. One GPU lock now covers every TensorRT call, held through the whole inference.</td></tr>
+<tr><td>3D labels slower than the drive</td><td>115 s for a 61 s session</td><td>The depth model ran at batch 6 and too often: batch-1 engine shapes, depth strictly at 2 Hz, three camera workers → 33 s.</td></tr>
+<tr><td>Visual speed failed above 25 m/s</td><td>Tracking lost at highway speed on rendered roads</td><td>Two causes: aliasing in the test renderer (fixed by supersampling) and too much image motion between frames (fixed by warping the next frame along the road plane by the previous motion). A coarse warp grid cut the cost from 128 ms to 37 ms per pair.</td></tr>
+<tr><td>Stale wheel-speed samples</td><td>The trajectory filter applied old CAN samples at start-up</td><td>Samples older than 50 ms are skipped; each carries its own uncertainty. This also fixed the existing CAN path.</td></tr>
+<tr><td>Recording duration inflated</td><td>The manifest included the time spent draining the guard after the cameras stopped</td><td>The end time is taken right after the cameras stop.</td></tr>
+<tr><td>A black frame matched every search</td><td>The first frame of a stream is black and is similar to every text query</td><td>Black frames are not embedded.</td></tr>
+<tr><td>Rare scenes missing from clusters</td><td>Random k-means seeding merged small clusters into big ones</td><td>k-means++ seeding; rarity re-defined as a percentile of nearest-neighbour distance outside the frame's own time window.</td></tr>
+<tr><td>Receiver configuration “not acknowledged”</td><td>Enabling interference reports appeared to fail</td><td>A timing issue in the configuration tool (fixed by waiting longer for the acknowledgement). Results are now reported per key — which also showed that this firmware genuinely rejects the jamming-detector key.</td></tr>
+<tr><td>Replay started at the wrong time</td><td>Foxglove replay began at the IMU lead-in, before the first video frame; a clip with only a start time failed</td><td>Replay starts at the first video frame; open-ended ranges are handled.</td></tr>
+<tr><td>GUI progress bars stuck</td><td>Jobs print progress only to a terminal</td><td><code>AVRIG_PROGRESS=1</code> makes them print progress lines for the GUI to parse.</td></tr>
+</table></div>
+
+<h2 id="principles-that-came-out-of-it">Principles that came out of it</h2>
+<ul>
+  <li><strong>Measure the thing, not a proxy.</strong> Arrival time is not capture time; a written control is not a set control; a smoke test with one camera is not six cameras at boot.</li>
+  <li><strong>Every live feature is A/B-tested on the rig</strong> with the recorder's own CPU time and the drop count, before it is on by default.</li>
+  <li><strong>Side work can lose data, the recording cannot.</strong> Leaky branches, bounded queues, rate limits before expensive conversions, callbacks that cannot raise.</li>
+  <li><strong>Fail visibly.</strong> Free-running is allowed, silent free-running is not. A forced recording is marked forced.</li>
+  <li><strong>Offline means offline.</strong> Heavy work refuses to run during a recording and stops if one starts.</li>
+</ul>
+
+<h2 id="not-yet-verified-on-hardware">Not yet verified on hardware</h2>
+<p>These code paths are implemented and covered by tests (framing, parsing, simulated data with exact truth), but each needs wiring or conditions the bench does not have yet.</p>
+<div class="table"><table>
+<tr><th>Feature</th><th>Needs</th><th>Status</th></tr>
+<tr><td>Frame sync at a cold boot via the service</td><td>One reboot</td><td>Warm-start path used by hand many times; confirm with <code>journalctl -u avrig-boot -b</code></td></tr>
+<tr><td>GNSS master clock</td><td>Antenna with sky view (fix), then the clock setup</td><td>CLOCK chip turns green; <code>clock.csv</code> realtime becomes GNSS time</td></tr>
+<tr><td>GNSS time marks of the camera trigger</td><td>Trigger → level shifter → receiver EXTINT; a fix</td><td>Parsing and the time-mark fit tested</td></tr>
+<tr><td>IMU SyncIn</td><td>Trigger → level shifter → MTi SYNC_IN</td><td>Settings readable; write path implemented with read-back</td></tr>
+<tr><td>CAN logging</td><td>Vehicle CAN + transceiver, correct bitrate</td><td>Frames and interface handling tested</td></tr>
+<tr><td>Live RTK</td><td>An NTRIP caster account (or own base) and a fix</td><td>Tested against a fake caster and fake gpsd; the write path to the receiver through gpsd checked on the rig</td></tr>
+<tr><td>PPK</td><td>Raw logging + base-station data</td><td>Raw logging checked on the rig (indoors: no measurements)</td></tr>
+<tr><td>Trajectory</td><td>A drive with a fix</td><td>Simulated drives only</td></tr>
+<tr><td>Calibration studio</td><td>A printed, measured ChArUco board</td><td>Rendered views; full-resolution pipeline run on a real session</td></tr>
+<tr><td>Plate blurring</td><td>Road traffic</td><td>Detector checked on a sample photo; faces / heads on real footage</td></tr>
+<tr><td>LED sync check, status LED</td><td>An LED + resistor on a GPIO</td><td>Synthetic data; no pin driven yet</td></tr>
+<tr><td>Hands-free mode</td><td>Driving</td><td>Full start / split / stop cycle with simulated cameras and speed</td></tr>
+<tr><td>Depot / fleet</td><td>A NAS / several rigs</td><td>Local directory / local HTTP servers</td></tr>
+<tr><td>Camera-mount guard</td><td>A drive with turns and straight road</td><td>Rendered scenes; on the rig it ran in recordings (stationary: nothing to learn) and offline on real sessions</td></tr>
+<tr><td>Visual speed</td><td>A drive with a calibrated forward camera</td><td>Rendered road only; real asphalt, glare, wet roads and traffic will lower the valid-measurement rate</td></tr>
+<tr><td>3D pre-labels</td><td>A calibration and a drive</td><td>Run on real footage with nominal geometry; accuracy measured with exact synthetic boxes only</td></tr>
+<tr><td>Map layers</td><td>Repeated drives with GNSS (landmarks: + calibration)</td><td>Synthetic signals, rays and passes</td></tr>
+<tr><td>Reconstruction export</td><td>A drive with trajectory and calibration; a desktop GPU</td><td>Export structure tested on a simulated drive; no reconstruction trained</td></tr>
+<tr><td>GNSS jamming state</td><td>Receiver firmware with the interference detector</td><td>Not in this firmware; indicator, antenna and spoofing state work</td></tr>
+</table></div>
+<div class="pager"><a href="troubleshooting.html"><small>Previous</small>Troubleshooting</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

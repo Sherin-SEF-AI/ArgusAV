@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command reference - Argus</title>
+<meta name="description" content="Every avrig command, grouped by task.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html" aria-current="page">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#rig-and-recording">Rig and recording</a><a href="#sensors-and-clocks">Sensors and clocks</a><a href="#sessions-qa-storage-export">Sessions: QA, storage, export</a><a href="#calibration-and-trajectory">Calibration and trajectory</a><a href="#perception-and-the-av-lab">Perception and the AV lab</a><a href="#root-setup-script">Root setup script</a><a href="#environment">Environment</a></aside><article class="content"><div class="kicker">Commands</div>
+<h1>Command reference</h1>
+<p class="lead">Everything in the GUI is also a command. <code>avrig COMMAND --help</code> lists every option; global options are <code>--config FILE</code>, <code>--sim</code> (simulated cameras, no hardware), <code>-v</code> and <code>-q</code>.</p>
+<p>Commands that use the cameras take an instance lock, so they refuse to run while the GUI or another recorder holds the rig. After-the-drive commands refuse to start while a recording is running.</p>
+
+<h2 id="rig-and-recording">Rig and recording</h2>
+<div class="table"><table>
+<tr><th>Command</th><th>Purpose</th></tr>
+<tr><td><code>status</code></td><td>Health of cameras, sensors and clocks without streaming</td></tr>
+<tr><td><code>check [-t S]</code></td><td>Stream everything for a few seconds: sync, drops, sensors, quality, host and health (exit code = health)</td></tr>
+<tr><td><code>monitor [--remote]</code></td><td>Live terminal dashboard</td></tr>
+<tr><td><code>sync on|off|status [--boot]</code></td><td>Hardware frame sync. <code>on</code> warm-starts the cameras, enables sync, reads it back and verifies the lock; <code>--boot</code> waits for the cameras and retries once (used by the boot service)</td></tr>
+<tr><td><code>record [-t S] [--operator --vehicle --route --weather --light …]</code></td><td>Preflight-gated recording with metadata; stdin markers (Enter, a digit, or text)</td></tr>
+<tr><td><code>gui [--remote]</code></td><td>The operator application (optionally with the LAN status page)</td></tr>
+<tr><td><code>soak 2h</code></td><td>Long recording + verify + report, with a thermal / load / sync trend</td></tr>
+<tr><td><code>auto</code></td><td>Hands-free collection: record while driving, stop when parked (normally the <code>avrig-auto</code> service)</td></tr>
+<tr><td><code>perf on|off|status</code></td><td>Collection mode (clocks, paused containers, stopped services while recording)</td></tr>
+<tr><td><code>wizard</code></td><td>Camera-position verification: cover and uncover one lens at a time; writes udev rules for stable <code>/dev/cam_&lt;position&gt;</code> names</td></tr>
+</table></div>
+
+<h2 id="sensors-and-clocks">Sensors and clocks</h2>
+<div class="table"><table>
+<tr><th>Command</th><th>Purpose</th></tr>
+<tr><td><code>clock [--calibrate]</code></td><td>Master-clock state; measures the GNSS message latency</td></tr>
+<tr><td><code>gnss [--raw-enable] [--rf-enable] [--ntrip] [--enable] [--persist]</code></td><td>Receiver: raw measurements for PPK, interference reports, an RTK caster test, time marks of the camera trigger</td></tr>
+<tr><td><code>imu [--set FUNCTION LINE --yes]</code></td><td>Xsens SyncIn settings (show, or write and read back)</td></tr>
+<tr><td><code>can [-t S]</code></td><td>CAN interface state and frame rate</td></tr>
+<tr><td><code>mount [status|reset|check SESSION]</code></td><td>Camera-mount guard: references, forget one (<code>--cams X --yes</code>), check a recorded drive (<code>--adopt</code> stores learned references)</td></tr>
+<tr><td><code>ledsync --gpio LINE</code> / <code>--analyze SESSION</code></td><td>Optical sync check with an LED</td></tr>
+</table></div>
+
+<h2 id="sessions-qa-storage-export">Sessions: QA, storage, export</h2>
+<div class="table"><table>
+<tr><th>Command</th><th>Purpose</th></tr>
+<tr><td><code>sessions</code></td><td>Index: duration, size, status, verify result, offloaded, markers</td></tr>
+<tr><td><code>verify SESSION… [--quick] [--report] [--json]</code></td><td>Offline QA; writes <code>verify.json</code></td></tr>
+<tr><td><code>report SESSION</code></td><td>Self-contained <code>report.html</code></td></tr>
+<tr><td><code>trends [--html]</code></td><td>Rig health across sessions, with wear findings</td></tr>
+<tr><td><code>events SESSION… [--list] [--write]</code></td><td>Re-detect automatic events with the current thresholds</td></tr>
+<tr><td><code>offload SESSION… --dest DIR</code></td><td>SHA-256-verified, resumable copy with receipts</td></tr>
+<tr><td><code>prune --older-than DAYS [--yes]</code></td><td>Delete only sessions whose verified copy still re-hashes correctly (dry run by default)</td></tr>
+<tr><td><code>depot</code></td><td>Verify + offload (+ prune) when the destination is reachable (normally a timer)</td></tr>
+<tr><td><code>retain SESSION [--pre --post] [--replace --yes]</code></td><td>Event-only copy (hard links), verified before anything is deleted</td></tr>
+<tr><td><code>export mcap SESSION</code></td><td>Indexed MCAP for Foxglove / ROS 2 (video copied verbatim)</td></tr>
+<tr><td><code>export frames SESSION --markers|--every S|--at NS</code></td><td>Timestamp-matched frame sets from all cameras</td></tr>
+<tr><td><code>fleet --rigs name=URL,…</code></td><td>One dashboard for several rigs' status pages</td></tr>
+</table></div>
+
+<h2 id="calibration-and-trajectory">Calibration and trajectory</h2>
+<div class="table"><table>
+<tr><th>Command</th><th>Purpose</th></tr>
+<tr><td><code>calib register FILE --name N [--activate]</code></td><td>Immutable, hashed calibration registry; sessions record the active id</td></tr>
+<tr><td><code>calib list|reference|check</code></td><td>List; store reference views in the calibration bay; detect a moved camera later</td></tr>
+<tr><td><code>calibrate board</code></td><td>Printable ChArUco board at true size</td></tr>
+<tr><td><code>calibrate solve SESSION --square M [--register NAME --activate]</code></td><td>Intrinsics + extrinsics from a board recording</td></tr>
+<tr><td><code>calibrate kalibr SESSION</code></td><td>Export for camera-IMU calibration in Kalibr</td></tr>
+<tr><td><code>trajectory SESSION… [--visual] [--vo-cam CAM]</code></td><td>Smoothed 6-DoF trajectory (GNSS + IMU, optional CAN and visual speed)</td></tr>
+</table></div>
+
+<h2 id="perception-and-the-av-lab">Perception and the AV lab</h2>
+<div class="table"><table>
+<tr><th>Command</th><th>Purpose</th></tr>
+<tr><td><code>models [--fetch] [--build]</code></td><td>Download (checksums and revisions pinned, ~750 MB) and compile TensorRT engines (~30 min once)</td></tr>
+<tr><td><code>tag SESSION…</code></td><td>Objects at 2 fps: <code>tags.csv</code>, <code>detections.csv</code></td></tr>
+<tr><td><code>anonymize SESSION</code></td><td>Blurred copy (faces, heads, number plates), same frames</td></tr>
+<tr><td><code>catalog</code> · <code>search QUERY [--export DIR]</code> · <code>coverage</code></td><td>Scenario catalog, search with clip export, coverage map</td></tr>
+<tr><td><code>embed SESSION…</code></td><td>CLIP embeddings and zero-shot scene labels</td></tr>
+<tr><td><code>find "TEXT" | --like S:CAM:NS | --image FILE</code></td><td>Frames by meaning across every embedded session</td></tr>
+<tr><td><code>rare [--html]</code> · <code>curate --budget N</code></td><td>Rarest frames, clusters, scene-condition hours; a diverse rarity-weighted selection</td></tr>
+<tr><td><code>label3d SESSION… [--nominal-geometry]</code></td><td>Tracked 3D pre-labels of road users</td></tr>
+<tr><td><code>cvat export|import SESSION [FOLDER] --cam X</code></td><td>Review 2D tracks in CVAT; reviewed tracks drive the next <code>label3d</code></td></tr>
+<tr><td><code>dataset SESSION --format nuscenes|kitti [--annotate] [--select FILE]</code></td><td>Dataset export with ego poses, calibration, pre-annotations, 3D pre-labels</td></tr>
+<tr><td><code>maps update|html|changes</code></td><td>Road roughness, potholes, traffic lights / stop signs and their changes</td></tr>
+<tr><td><code>foxglove SESSION [--speed --start --loop]</code></td><td>Live replay into Foxglove over WebSocket</td></tr>
+<tr><td><code>recon SESSION [--hz] [--no-masks]</code></td><td>Nerfstudio dataset for neural reconstruction</td></tr>
+</table></div>
+
+<h2 id="root-setup-script">Root setup script</h2>
+<pre><code>sudo bash setup/avrig-install.sh --status
+sudo bash setup/avrig-install.sh --autostart
+sudo bash setup/avrig-install.sh --collection-mode --pause-containers "NAME" --stop-services "NAME"
+sudo bash setup/avrig-install.sh --can --bitrate 500000 --ifaces "can0 can1"
+sudo bash setup/avrig-install.sh --auto
+sudo bash setup/avrig-install.sh --depot
+sudo bash setup/avrig-install.sh --uninstall
+bash setup/install-desktop.sh [--remove]      <span class="c"># desktop shortcut, no root</span></code></pre>
+
+<h2 id="environment">Environment</h2>
+<dl class="defs">
+  <dt><code>AVRIG_PROGRESS=1</code></dt><dd>Print progress lines even when stdout is not a terminal (the GUI sets it to drive its progress bars).</dd>
+  <dt><code>~/.config/avrig.yaml</code></dt><dd>Configuration; validated, unknown keys rejected.</dd>
+  <dt><code>~/.config/avrig/presets.yaml</code></dt><dd>Pick lists for operators, vehicles, routes, conditions and tags.</dd>
+  <dt><code>~/.local/share/avrig/</code></dt><dd>Models, calibration registry, mount references, catalog and map databases.</dd>
+  <dt><code>~/.local/state/avrig/</code></dt><dd>Audit log and application log.</dd>
+</dl>
+<div class="pager"><a href="performance.html"><small>Previous</small>Performance</a><a class="next" href="troubleshooting.html"><small>Next</small>Troubleshooting</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

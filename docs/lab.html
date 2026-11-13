@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AV-lab tools - Argus</title>
+<meta name="description" content="Search by meaning, curation, 3D pre-labels, trajectory and visual speed, map layers, datasets, reconstruction and Foxglove.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html" aria-current="page">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#search-by-meaning">Search by meaning</a><a href="#scenario-catalog">Scenario catalog</a><a href="#collection-and-curation">Collection and curation</a><a href="#tagging-and-privacy">Tagging and privacy blurring</a><a href="#3d-pre-labels">3D pre-labels</a><a href="#trajectory-and-visual-speed">Trajectory and visual speed</a><a href="#map-layers">Map layers</a><a href="#calibration-studio">Calibration studio</a><a href="#datasets">Datasets</a><a href="#foxglove-live-and-replay">Foxglove live and replay</a><a href="#reconstruction-export">Reconstruction export</a><a href="#led-sync-check">LED sync check</a></aside><article class="content"><div class="kicker">AV-lab tools</div>
+<h1>From drives to data</h1>
+<p class="lead">After the drive, Argus turns recordings into something a perception team can use: searchable by meaning, curated for diversity, pre-labelled in 3D, placed on a smoothed trajectory, mapped across drives, and exported to the formats the tools expect.</p>
+<div class="note"><p>None of this runs during a recording. Every job runs at the lowest CPU and I/O priority, refuses to start while recording, and stops itself if one starts. In the GUI they live in the <strong>Lab</strong> window — Explore, Scenarios, Collection, Labels &amp; maps, Rig health, Calibration and Processing — and every job shows a progress bar, elapsed time and a Stop button.</p></div>
+<figure class="shot"><img src="img/lab-processing.png" alt="Lab window Processing tab with a running job and progress bar" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Processing: jobs with progress, elapsed time and Stop.</figcaption></figure>
+
+<h2 id="search-by-meaning">Search by meaning</h2>
+<figure class="shot"><img src="img/lab-explore.png" alt="Lab Explore tab showing search results as thumbnails" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Explore: free-text search across every embedded session. Double-click a result to replay that moment. People in the camera images are pixelated for publication.</figcaption></figure>
+<p><code>avrig embed SESSION</code> gives every second of every camera a CLIP ViT-B/32 embedding (MIT licence) and zero-shot scene labels for lighting, weather, road type and traffic. Only the encoder's keyframes are decoded — one per second, about 1/30 of the video — so a minute of six-camera recording embeds in 4 s from a warm cache (21 s from a cold disk).</p>
+<pre><code>avrig find "cyclist crossing at night"
+avrig find --like SESSION:front_wide:MONO_NS      <span class="c"># more like this frame</span>
+avrig find --image photo.jpg                      <span class="c"># search with an image</span>
+avrig search 'scene:rain night person&gt;=2'         <span class="c"># mixed with catalog terms</span></code></pre>
+<ul>
+  <li>Text is encoded with CLIP's own byte-pair tokenizer (reimplemented, checked against reference token ids).</li>
+  <li>Black frames (a lens cap, the first frame of a stream) are skipped — otherwise they match every query weakly.</li>
+  <li>Results are de-duplicated: near-identical frames (cosine similarity above 0.95, a parked car seeing the same wall in many sessions) show once.</li>
+  <li>CLIP B/32 is coarse: it finds scene types and objects well, fine attributes (a shirt pattern) less so.</li>
+</ul>
+
+<h2 id="scenario-catalog">Scenario catalog</h2>
+<p><code>avrig catalog</code> cuts every session into 10 s windows in one SQLite file (incremental): position and speed, sun elevation (day / twilight / night computed from UTC and position, not from exposure), image brightness, events, detected objects, the scene labels and the session metadata. <code>avrig search</code> ANDs terms:</p>
+<pre><code>night person&gt;=3 road:highway
+hard_brake speed&gt;40
+traffic_light twilight
+near:LAT,LON,KM  vehicle:X  route:X  weather:X  tag:X  since:2026-11-01
+"wet road at night with a cyclist"           <span class="c"># free text, ranked by meaning</span></code></pre>
+<p>Hits are merged into clips; <code>--export DIR</code> writes each as an MCAP clip starting at the keyframe before it, so it decodes from its first frame (a 10 s clip in 6.8 s), or as frame sets. <code>avrig coverage</code> draws every drive on one map, coloured by day / twilight / night, with hours and kilometres per condition.</p>
+
+<h2 id="collection-and-curation">Collection and curation</h2>
+<figure class="shot"><img src="img/lab-collection.png" alt="Lab Collection tab with hours per scene condition and rare frames" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Collection: hours per scene condition (what is missing), and the rarest frames of the collection. People in the camera images are pixelated for publication.</figcaption></figure>
+<ul>
+  <li><strong>Coverage by condition</strong> — hours per lighting, weather, road and traffic label, so gaps (“little night driving, no rain”) are visible.</li>
+  <li><strong>Rarity</strong> — for each frame, 1 − its mean similarity to its 10 nearest frames <em>outside its own session's ±30 s</em> (so a long stop does not make itself common), expressed as a percentile of the whole collection.</li>
+  <li><strong>Clusters</strong> — k-means with k-means++ seeding (plain random seeding missed small, rare clusters), smallest first.</li>
+  <li><strong>Curation</strong> — <code>avrig curate --budget N</code> picks a diverse selection by farthest-point sampling weighted by rarity, then <code>avrig dataset SESSION --select selection.csv</code> exports exactly those keyframes.</li>
+</ul>
+
+<h2 id="tagging-and-privacy">Tagging and privacy blurring</h2>
+<ul>
+  <li><code>avrig tag SESSION</code> runs YOLOX-s on every camera at 2 fps: <code>tags.csv</code> for the catalog and <code>detections.csv</code> as pre-annotations. 5.6 min × 6 cameras took 118 s — 3× faster than real time.</li>
+  <li><code>avrig anonymize SESSION</code> writes a copy (<code>&lt;session&gt;_anon</code>) with faces and number plates blurred: YuNet faces on the frame and inside each person's head region, a plate detector on the frame and on each vehicle, the head of anyone whose face was not found blurred anyway, and the previous frame's boxes blurred too, so a one-frame miss does not leak. Pixelation is irreversible. Every output file has exactly the frames of its source (checked), so replay and export work unchanged. 61 s × 6 cameras (10,876 frames): 494 s with 3 workers. Review blurred data before release — detection is never perfect.</li>
+</ul>
+
+<h2 id="3d-pre-labels">3D pre-labels</h2>
+<figure class="shot"><img src="img/lab-labels.png" alt="Lab Labels and maps tab with a top-down view of tracked 3D boxes" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Labels &amp; maps: tracked 3D boxes top-down around the vehicle, with a time slider.</figcaption></figure>
+<p><code>avrig label3d SESSION</code> builds tracked 3D boxes of road users from the cameras alone:</p>
+<ol>
+  <li><strong>Detect and track</strong> — YOLOX at 10 Hz in every camera on a common time grid; per-camera tracking (Kalman + Hungarian on IoU) → <code>tracks2d.csv</code>.</li>
+  <li><strong>Lift to 3D</strong> — the ray through the bottom centre of each box meets the ground plane (calibrated camera height and angle); the object's centre is placed where that ray enters a road-aligned footprint of the class's size. When the box is cut by the image edge or the ray misses the ground, the range comes from Depth Anything V2 Small (Apache-2.0), scaled to metres by a RANSAC fit of the ground in the same frame.</li>
+  <li><strong>Merge and smooth</strong> — observations are moved to the world frame with the trajectory, the same object seen by several cameras is merged into one instance, tracks are smoothed, heading comes from motion.</li>
+  <li><strong>Label</strong> — at 2 Hz (the nuScenes keyframe rate) → <code>labels3d.csv</code>, and nuScenes <code>category</code>, <code>attribute</code>, <code>instance</code> and <code>sample_annotation</code> tables in <code>avrig dataset</code>, marked <code>prelabel</code>.</li>
+</ol>
+<p><strong>Review loop:</strong> <code>avrig cvat export SESSION --cam X</code> writes the 2D tracks as CVAT for video 1.1; a person corrects them in CVAT; <code>avrig cvat import SESSION FOLDER</code> stores the reviewed tracks, and the next <code>label3d</code> lifts from them instead of the detector's.</p>
+<p>Cost: 33 s for 61 s of six cameras (three camera workers sharing one GPU lock). On simulated data with exact boxes, positions came within a median 0.2 m for front cameras and 0.5 m for a side camera seeing cars at an angle. These are monocular pre-labels, not LiDAR ground truth: error grows with range, and occluded objects are missed. Without a calibration, <code>--nominal-geometry</code> gives rough labels marked as such.</p>
+
+<h2 id="trajectory-and-visual-speed">Trajectory and visual speed</h2>
+<p><code>avrig trajectory SESSION</code> computes a 6-DoF pose for every IMU sample, and so for every camera frame:</p>
+<ul>
+  <li>an error-state Kalman filter (15 states: position, velocity, attitude, accelerometer and gyro biases) driven by the IMU, followed by a Rauch-Tung-Striebel smoother, so every pose uses data before <em>and</em> after it;</li>
+  <li>GNSS position at the fix's own time with the antenna lever arm, GNSS velocity when moving, zero-velocity updates when stopped, a no-sideslip constraint for a car, and CAN wheel speed when available;</li>
+  <li>IMU mounting estimated from the drive itself (roll / pitch from gravity, yaw by matching the IMU's horizontal acceleration to the vehicle's) — within 0.1° in simulation, including upside-down and odd yaw mountings.</li>
+</ul>
+<p><strong>Visual speed</strong> (<code>--visual</code>) turns a calibrated forward camera into a wheel-speed sensor for tunnels and flyovers. Road features 3–15 m ahead are tracked between neighbouring frames; the next frame is first warped along the road plane by the previous motion, so tracking holds at highway speed; every tracked road pixel is a point on the ground in metres, and a RANSAC 2D rigid fit gives forward speed and yaw rate. The speed's scale is calibrated against GNSS where both exist, and each measurement enters the filter with its own uncertainty.</p>
+<div class="table"><table>
+<tr><th>Simulated result</th><th>Value</th></tr>
+<tr><td>Trajectory, 200 s drive, 1 Hz GNSS with 1.5 m RMS error</td><td>0.37–0.42 m RMS horizontal; yaw 0.06–0.08° median; the reported 1-σ matched the real error</td></tr>
+<tr><td>Visual speed on a rendered road</td><td>±1.5 % from 5 to 45 m/s (162 km/h); yaw rate within 0.3°/s</td></tr>
+<tr><td>120 s GNSS outage (1.27 km), drifting accelerometer bias</td><td>max error <strong>5.2 m → 0.57 m</strong> with visual speed; a 2 % scale error recovered within 0.07 %</td></tr>
+</table></div>
+
+<h2 id="map-layers">Map layers</h2>
+<p><code>avrig maps update</code> adds sessions to one incremental map database; <code>avrig maps html</code> draws it; <code>avrig maps changes</code> lists what changed.</p>
+<ul>
+  <li><strong>Road roughness</strong> — IMU vertical vibration, band-passed 0.5–20 Hz, RMS per second while moving, normalised by speed (RMS / √(v / 10 m/s)) and averaged into 10 m cells; every pass refines it.</li>
+  <li><strong>Potholes and bumps</strong> — vertical peaks above 0.35 g, with position and speed.</li>
+  <li><strong>Landmarks</strong> — traffic lights and stop signs triangulated from their tracked detections with the trajectory and calibration, merged across drives within 4 m.</li>
+  <li><strong>Changes</strong> — a landmark that later passes have in view but no longer see (“possibly removed”), or one that appears where earlier passes saw nothing (“new”).</li>
+</ul>
+<p>On synthetic drives: rough road ranked more than 3× smooth (braking excluded), the pothole found at its second, landmarks within 0.6 m, a removed sign reported after 2 passes.</p>
+
+<h2 id="calibration-studio">Calibration studio</h2>
+<figure class="shot"><img src="img/lab-calibration.png" alt="Lab Calibration tab" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Calibration: board, solve, registry and the camera-moved check.</figcaption></figure>
+<ol>
+  <li><code>avrig calibrate board</code> writes a printable ChArUco board at true size. Print at 100 %, mount it flat, and <strong>measure</strong> a square.</li>
+  <li>Record a session while moving the board through every camera's whole image and through the overlap of neighbouring cameras; the GUI shows live detection and coverage.</li>
+  <li><code>avrig calibrate solve SESSION --square 0.0597 --register NAME --activate</code>: full-resolution frames on NVDEC, the fisheye (Kannala-Brandt) model for wide lenses and pinhole + radial-tangential for narrow ones, outlier-view rejection, and extrinsics from <em>hardware-synced</em> frame pairs (~30 µs apart) chained to the reference camera. Writes <code>calibration.yaml</code>, ROS <code>camera_info</code>, a Kalibr <code>camchain.yaml</code> and a report.</li>
+  <li>Camera-IMU: <code>avrig calibrate kalibr SESSION</code> exports images and <code>imu0.csv</code> for Kalibr (which needs an AprilGrid target).</li>
+</ol>
+<p>On rendered views: pinhole focal length within 0.03 %, centre within 0.6 px, fisheye within 0.33 px median; extrinsics within 0.03° and 1.3 mm.</p>
+
+<h2 id="datasets">Datasets</h2>
+<ul>
+  <li><strong>nuScenes-style</strong> (<code>avrig dataset SESSION --format nuscenes</code>): keyframes at 2 Hz from all cameras, ego pose from the trajectory, camera intrinsics and poses on the vehicle (needs a calibration and the reference camera's measured pose), IMU as CAN-bus JSON, COCO pre-annotations with <code>--annotate</code>, and 3D pre-label tables when <code>labels3d.csv</code> exists. Tables load with the devkit's schema.</li>
+  <li><strong>KITTI-raw-style</strong> (<code>--format kitti</code>): image folders with timestamps, OXTS-style poses, camera and IMU calibration files.</li>
+  <li><strong>Selection</strong> (<code>--select selection.csv</code>): only the curated keyframes.</li>
+</ul>
+
+<h2 id="foxglove-live-and-replay">Foxglove live and replay</h2>
+<p>Argus speaks the Foxglove WebSocket protocol directly, with no extra packages (RFC 6455 on the Python standard library).</p>
+<ul>
+  <li><strong>Replay</strong> — <code>avrig foxglove SESSION [--speed 2 --start 30 --loop]</code> streams the same messages as the MCAP export (H.265 video, IMU, GNSS, markers, <code>/tf</code>, annotations, calibration) at real time to <code>ws://localhost:8765</code>. No export step, nothing written.</li>
+  <li><strong>Live</strong> — <code>foxglove_live: true</code>: while recording, small JPEG previews (~5 fps per camera), IMU at 100 Hz, the GNSS fix and the rig status. Work is done only for subscribed topics. Measured with a viewer on every topic: recorder CPU unchanged (164 %), LOCKED, 0 drops.</li>
+  <li><strong>Safety</strong> — every viewer has a bounded send queue: a slow viewer loses messages, the rig never waits. It binds to 127.0.0.1 by default; on the LAN set <code>foxglove_bind</code> and a token (<code>?token=</code>). The FOX chip shows the viewers.</li>
+</ul>
+
+<h2 id="reconstruction-export">Reconstruction export</h2>
+<p><code>avrig recon SESSION</code> writes a Nerfstudio dataset: <code>transforms.json</code> with camera-to-world poses (trajectory × calibration, OpenGL axes, scene centred) and OPENCV / OPENCV_FISHEYE intrinsics, full-resolution images, and masks over moving objects (from the 2D tracks or detections, boxes grown 10 %), so reconstruction of the static world ignores them. Train on a desktop GPU, e.g. <code>ns-train splatfacto --data DIR</code>. About 35 GB per hour of driving at 2 Hz × 6 cameras.</p>
+
+<h2 id="led-sync-check">LED sync check</h2>
+<p>Timestamps can agree while images do not. <code>avrig ledsync</code> flashes an LED on a 40-pin GPIO for 0.5 ms every 200.7 ms; 200 ms is six frame periods, so each flash lands 0.7 ms later in the 33.3 ms frame cycle and the flashes sweep the whole cycle in ~10 s, like a vernier. From the recorded LED brightness against each frame's timestamp, it measures each camera's exposure window relative to its own timestamp — proof that the <em>images</em> line up, not only the timestamps. The analysis is validated on synthetic data; the LED wiring is still to be done.</p>
+<div class="pager"><a href="features.html"><small>Previous</small>Operator</a><a class="next" href="performance.html"><small>Next</small>Performance</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

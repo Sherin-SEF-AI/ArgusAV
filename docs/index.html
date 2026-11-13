@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argus - synced six-camera data collection on Jetson</title>
+<meta name="description" content="Argus records six hardware-synchronised GMSL2 cameras, an IMU and GNSS on a Jetson AGX Orin, and turns the drives into AV-lab data.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html" aria-current="page">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><section class="hero">
+  <div>
+    <img class="logo" src="img/argus.svg" alt="Argus logo" width="72" height="72">
+    <div class="kicker">AV data collection on Jetson AGX Orin</div>
+    <h1>Argus</h1>
+    <p class="lead">Six GMSL2 cameras captured on one hardware trigger, an IMU and a GNSS receiver on one clock, recorded as annotation-ready H.265 with a per-frame capture timestamp. After the drive, the same tool turns the recordings into searchable, labelled, mapped AV-lab data.</p>
+    <p>Argus is the display name; the command is <code>avrig</code>.</p>
+    <div class="cta">
+      <a class="btn primary" href="getting-started.html">Get started</a>
+      <a class="btn" href="how-it-works.html">How it works</a>
+      <a class="btn" href="https://github.com/Sherin-SEF-AI/ArgusAV">Source</a>
+    </div>
+  </div>
+  <div class="hero-shot">
+    <img src="img/main.png" alt="The Argus operator window with six live camera views and the status chip bar" loading="eager" onerror="this.onerror=null;this.src='img/argus.svg';this.parentNode.classList.add('hero-fallback')">
+  </div>
+</section>
+
+<div class="stats">
+  <div class="stat"><b>29 µs</b><span>median spread between the six cameras (p95 36 µs), from driver timestamps</span></div>
+  <div class="stat"><b>0 drops</b><span>in a 4-minute soak and in a verified 61 s recording</span></div>
+  <div class="stat"><b>180 %</b><span>of one core to record all six cameras (the Orin has 12)</span></div>
+  <div class="stat"><b>2.1–2.4 s</b><span>to recover a stalled camera, while the other five keep recording</span></div>
+  <div class="stat"><b>102 tests</b><span>unit, simulated cameras on real GStreamer/NVENC, and GPU</span></div>
+</div>
+
+<h2 id="what-it-is">What it is</h2>
+<p>Argus is the data-collection application for one specific rig: a Jetson AGX Orin 64 GB with six e-con STURDeCAM31 cameras (four wide, two narrow) on a GMSL2 deserializer, an Xsens MTi-3 IMU and a u-blox F9P GNSS receiver. It was built for a data-collection team and an AV lab, and is designed so that <strong>every fault is attributable to a sensor, a timestamp and a cause</strong>: a session that is not trustworthy says so instead of looking fine.</p>
+
+<div class="grid">
+  <a class="card" href="how-it-works.html#capture-pipeline"><span class="tag">Capture</span><h3>True capture time</h3><p>Frames are dequeued directly from V4L2 with the driver's SoC TSC timestamp (~15 µs jitter), not GStreamer's arrival time (milliseconds under load).</p></a>
+  <a class="card" href="how-it-works.html#hardware-frame-sync"><span class="tag">Sync</span><h3>Hardware frame sync</h3><p>All six sensors are slaved to one trigger. A warm-start procedure enables it safely at boot, and the lock is measured every second.</p></a>
+  <a class="card" href="how-it-works.html#supervision-and-recovery"><span class="tag">Reliability</span><h3>One camera never stops the rest</h3><p>One capture thread and one pipeline per camera; a supervisor restarts a stalled camera alone, with back-off.</p></a>
+  <a class="card" href="features.html#live-guards"><span class="tag">Live guards</span><h3>Mount and RF guards</h3><p>Warns when a camera has moved on its mount, or the GNSS antenna fails, is jammed or spoofed.</p></a>
+  <a class="card" href="features.html#quality-assurance"><span class="tag">QA</span><h3>Preflight, verify, report</h3><p>A FAIL blocks recording. Every session can be verified frame by frame and summarised in a self-contained HTML report.</p></a>
+  <a class="card" href="lab.html#search-by-meaning"><span class="tag">Lab</span><h3>Search by meaning</h3><p>“cyclist crossing at night” across every drive, with CLIP embeddings of one keyframe per second per camera.</p></a>
+  <a class="card" href="lab.html#3d-pre-labels"><span class="tag">Lab</span><h3>3D pre-labels</h3><p>Tracked 3D boxes of road users from the cameras, merged across views, with a CVAT review loop and nuScenes export.</p></a>
+  <a class="card" href="lab.html#trajectory-and-visual-speed"><span class="tag">Lab</span><h3>Through GNSS outages</h3><p>A smoothed 6-DoF trajectory, with visual speed from the road when GNSS drops out.</p></a>
+  <a class="card" href="lab.html#map-layers"><span class="tag">Lab</span><h3>Map layers</h3><p>Road roughness, potholes, traffic lights and stop signs, and what changed between drives.</p></a>
+  <a class="card" href="lab.html#foxglove-live-and-replay"><span class="tag">Interop</span><h3>Foxglove, MCAP, nuScenes</h3><p>Live view and replay in Foxglove, indexed MCAP, nuScenes / KITTI datasets, Nerfstudio export.</p></a>
+</div>
+
+<h2 id="the-operator-window">The operator window</h2>
+<p>One window for the drive: six live views, a chip bar that turns every health rule into one glance (SYNC, CAMS, QUALITY, IMU, GNSS, CLOCK, REC, DISK, ISSUES, plus MOUNT, RF and FOX), metadata, markers on hotkeys, and the Sessions and Lab windows for everything after the drive.</p>
+<figure class="shot"><img src="img/main.png" alt="Operator window" loading="lazy" onerror="this.parentNode.remove()"><figcaption>The operator window: live cameras, chip bar and recording controls. People in the camera images are pixelated for publication.</figcaption></figure>
+
+<h2 id="after-the-drive">After the drive</h2>
+<p>Heavy work never runs during a recording. Verification, export, neural networks and dataset building run afterwards at the lowest CPU and I/O priority, refuse to start while recording, and stop themselves if one starts.</p>
+<figure class="shot"><img src="img/lab-explore.png" alt="Lab window, Explore tab with search results as thumbnails" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Explore: free-text search across every recorded session, results as thumbnails; double-click replays that moment. People in the camera images are pixelated for publication.</figcaption></figure>
+
+<h2 id="where-to-go-next">Where to go next</h2>
+<div class="grid">
+  <a class="card" href="getting-started.html"><h3>Getting started</h3><p>Install, sync at boot, desktop shortcut, the two daily commands.</p></a>
+  <a class="card" href="how-it-works.html"><h3>How it works</h3><p>The capture pipeline, timing model and why each design decision was made.</p></a>
+  <a class="card" href="performance.html"><h3>Performance</h3><p>What every feature costs on the Jetson, measured, and simulated accuracy.</p></a>
+  <a class="card" href="lessons.html"><h3>Engineering notes</h3><p>The problems hit on the way, how they were fixed, and what is still unverified.</p></a>
+</div>
+<div class="pager"><a class="next" href="getting-started.html"><small>Next</small>Get started</a></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

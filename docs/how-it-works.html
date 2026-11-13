@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works - Argus</title>
+<meta name="description" content="Capture pipeline, driver timestamps, hardware frame sync, the clock model, supervision, health and the session format.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html" aria-current="page">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#design-goals">Design goals</a><a href="#architecture">Architecture</a><a href="#capture-pipeline">Capture pipeline</a><a href="#hardware-frame-sync">Hardware frame sync</a><a href="#clock-model">Clock model</a><a href="#imu-and-gnss">IMU and GNSS</a><a href="#supervision-and-recovery">Supervision and recovery</a><a href="#health-and-preflight">Health and preflight</a><a href="#session-format">Session format</a><a href="#offline-work">Offline work and the GPU</a></aside><article class="content"><div class="kicker">How it works</div>
+<h1>How we made the rig work</h1>
+<p class="lead">Six cameras that expose together, timestamps that tell the truth, sensors on one clock, and a recorder that keeps going when one part fails. This page explains each layer and why it is built the way it is. The problems met on the way are on <a href="lessons.html">Engineering notes</a>.</p>
+
+<h2 id="design-goals">Design goals</h2>
+<ul>
+  <li><strong>Capture time, not arrival time.</strong> Every frame carries the time the hardware finished capturing it, to ~15 µs, on the same clock as the IMU and GNSS.</li>
+  <li><strong>Hardware sync, verified continuously.</strong> All six sensors expose on one trigger, and the lock is measured every second, not assumed.</li>
+  <li><strong>Every fault attributable.</strong> A dropped frame, a stalled camera, a lost lock, a disk error: each is logged with the camera, the time and the cause. A session that is not trustworthy says so.</li>
+  <li><strong>The recording never waits for anything else.</strong> Previews, quality checks, guards, the phone page and Foxglove all hang off leaky branches or run at low rate on other threads. Neural networks and decoding run only after the drive.</li>
+  <li><strong>Failures stay local.</strong> One capture thread and one pipeline per camera: a fault in one camera never stops the other five.</li>
+</ul>
+
+<h2 id="architecture">Architecture</h2>
+<div class="diagram"><svg class="dg" viewBox="0 0 960 516" role="img" aria-labelledby="arch-t">
+<title id="arch-t">Argus architecture: sensors, per-camera capture, control, outputs and offline tools</title>
+<defs>
+  <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ar" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ar hi" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<text class="h" x="20" y="30">SENSORS</text>
+<rect class="grp" x="16" y="40" width="180" height="330" rx="10"/>
+<rect class="bx" x="30" y="56" width="152" height="86" rx="7"/>
+<text x="42" y="78">6 × ISX031 cameras</text><text class="s" x="42" y="98">GMSL2 → deserializer</text><text class="s" x="42" y="116">→ Tegra VI, end-of-frame</text><text class="s" x="42" y="132">stamp from the SoC TSC</text>
+<rect class="bx hi" x="30" y="158" width="152" height="50" rx="7"/>
+<text x="42" y="180">FSIN trigger, 30 Hz</text><text class="s" x="42" y="198">deserializer MCU</text>
+<path class="ln hi" d="M106,158 L106,144" marker-end="url(#a2)"/>
+<rect class="bx" x="30" y="232" width="152" height="50" rx="7"/>
+<text x="42" y="254">Xsens MTi-3 IMU</text><text class="s" x="42" y="272">100 Hz, USB serial</text>
+<rect class="bx" x="30" y="300" width="152" height="56" rx="7"/>
+<text x="42" y="322">u-blox F9P GNSS</text><text class="s" x="42" y="342">gpsd owns the port</text>
+
+<text class="h" x="230" y="30">PER CAMERA ×6 · SENSOR THREADS</text>
+<rect class="grp" x="226" y="40" width="330" height="330" rx="10"/>
+<rect class="bx hi" x="240" y="56" width="150" height="64" rx="7"/>
+<text x="252" y="78">capture thread</text><text class="s" x="252" y="96">V4L2 mmap dequeue</text><text class="s" x="252" y="112">TSC time + sequence</text>
+<rect class="bx" x="410" y="56" width="132" height="64" rx="7"/>
+<text x="422" y="78">appsrc → tee</text><text class="s" x="422" y="96">PTS = capture time</text><text class="s" x="422" y="112">encode + preview only</text>
+<path class="ln hi" d="M390,88 L408,88" marker-end="url(#a2)"/>
+<path class="ln" d="M476,120 L476,138" marker-end="url(#a1)"/>
+<rect class="bx hi" x="240" y="140" width="302" height="38" rx="7"/>
+<text x="252" y="164">NVENC H.265 → mkv segments + frames.csv</text>
+<rect class="bx" x="240" y="186" width="146" height="34" rx="7"/>
+<text class="s" x="252" y="208">preview (rate-limited)</text>
+<rect class="bx" x="396" y="186" width="146" height="34" rx="7"/>
+<text class="s" x="408" y="208">quality 160×128, 1 Hz</text>
+<rect class="bx" x="240" y="228" width="302" height="34" rx="7"/>
+<text class="s" x="252" y="250">mount guard 640×512 grey, 4 Hz (leaky)</text>
+<rect class="bx" x="240" y="290" width="302" height="34" rx="7"/>
+<text class="s" x="252" y="312">IMU reader: Xbus frames, sample clock fit</text>
+<rect class="bx" x="240" y="332" width="302" height="30" rx="7"/>
+<text class="s" x="252" y="352">gpsd client + UBX tap (raw, RF)</text>
+<path class="ln hi" d="M182,99 L238,88" marker-end="url(#a2)"/>
+<path class="ln" d="M182,257 L238,306" marker-end="url(#a1)"/>
+<path class="ln" d="M182,328 L238,346" marker-end="url(#a1)"/>
+
+<text class="h" x="594" y="30">CONTROL</text>
+<rect class="grp" x="590" y="40" width="170" height="330" rx="10"/>
+<rect class="bx nv" x="600" y="56" width="150" height="94" rx="7"/>
+<text x="612" y="78">supervisor, 0.5 s</text><text class="s" x="612" y="96">restarts a stalled camera</text><text class="s" x="612" y="112">sync.csv 1 Hz, host.csv</text><text class="s" x="612" y="128">manifest checkpoints</text><text class="s" x="612" y="143">safe stop on disk errors</text>
+<rect class="bx nv" x="600" y="172" width="150" height="70" rx="7"/>
+<text x="612" y="194">health model</text><text class="s" x="612" y="212">preflight · chips</text><text class="s" x="612" y="228">CLI exit codes</text>
+<rect class="bx" x="600" y="260" width="150" height="56" rx="7"/>
+<text x="612" y="282">events · guards</text><text class="s" x="612" y="300">2 Hz, off capture</text>
+<path class="ln" d="M556,104 L598,104" marker-end="url(#a1)"/>
+
+<text class="h" x="798" y="30">OUTPUTS</text>
+<rect class="grp" x="794" y="40" width="150" height="330" rx="10"/>
+<rect class="bx hi" x="804" y="56" width="130" height="114" rx="7"/>
+<text x="816" y="78">session folder</text><text class="s" x="816" y="98">mkv + frames.csv</text><text class="s" x="816" y="114">imu, gnss, clock</text><text class="s" x="816" y="130">sync, quality, host</text><text class="s" x="816" y="146">markers, manifest</text>
+<rect class="bx" x="804" y="182" width="130" height="38" rx="7"/><text x="816" y="206">Argus GUI</text>
+<rect class="bx" x="804" y="228" width="130" height="38" rx="7"/><text x="816" y="252">phone page</text>
+<rect class="bx" x="804" y="274" width="130" height="38" rx="7"/><text x="816" y="298">Foxglove live</text>
+<path class="ln hi" d="M542,161 L802,161" marker-end="url(#a2)"/>
+<path class="ln" d="M750,104 L802,104" marker-end="url(#a1)"/>
+<path class="ln" d="M750,207 L802,203" marker-end="url(#a1)"/>
+<path class="ln" d="M869,370 L869,398" marker-end="url(#a1)"/>
+
+<text class="h" x="20" y="392">AFTER THE DRIVE · lowest priority · refused while recording · one GPU lock</text>
+<rect class="grp" x="16" y="400" width="928" height="100" rx="10"/>
+<rect class="bx" x="26" y="420" width="106" height="62" rx="7"/><text x="36" y="446">verify</text><text class="s" x="36" y="466">report, trends</text>
+<rect class="bx" x="142" y="420" width="106" height="62" rx="7"/><text x="152" y="446">MCAP</text><text class="s" x="152" y="466">replay, Foxglove</text>
+<rect class="bx" x="258" y="420" width="106" height="62" rx="7"/><text x="268" y="446">trajectory</text><text class="s" x="268" y="466">visual speed</text>
+<rect class="bx" x="374" y="420" width="106" height="62" rx="7"/><text x="384" y="446">embed</text><text class="s" x="384" y="466">search, curate</text>
+<rect class="bx" x="490" y="420" width="106" height="62" rx="7"/><text x="500" y="446">tag</text><text class="s" x="500" y="466">anonymize</text>
+<rect class="bx" x="606" y="420" width="106" height="62" rx="7"/><text x="616" y="446">label3d</text><text class="s" x="616" y="466">CVAT loop</text>
+<rect class="bx" x="722" y="420" width="106" height="62" rx="7"/><text x="732" y="446">maps</text><text class="s" x="732" y="466">changes</text>
+<rect class="bx" x="838" y="420" width="96" height="62" rx="7"/><text x="848" y="446">dataset</text><text class="s" x="848" y="466">recon</text>
+</svg></div>
+
+<h2 id="capture-pipeline">Capture pipeline</h2>
+<p>The Tegra video input stamps every frame at end-of-frame from the SoC's TSC counter. Those stamps are excellent: about 15 µs of jitter, and all six cameras share the counter. The problem is that the TSC counts from power-on while <code>CLOCK_MONOTONIC</code> starts at kernel start, so the stamps look ~20 s “in the future”. GStreamer's <code>v4l2src</code> sanity-checks them, logs <em>“Timestamp does not correlate with any clock, ignoring driver timestamps”</em>, and silently stamps each frame with its <strong>dequeue time</strong> instead — which jitters by milliseconds whenever the CPU is busy.</p>
+<p>So Argus does not let GStreamer capture. Each camera has its own capture thread that:</p>
+<ol>
+  <li>opens the device, negotiates 1920×1536 UYVY at 30 fps (and checks the negotiated format, because V4L2 silently clamps out-of-range requests);</li>
+  <li>dequeues mmap buffers itself and keeps the driver timestamp and the sequence number of every frame;</li>
+  <li>maps the TSC time to the host clock (below) and pushes the frame into a GStreamer <code>appsrc</code> with the true capture time as its PTS.</li>
+</ol>
+<p>GStreamer then only encodes and previews:</p>
+<pre><code>capture (V4L2 mmap, TSC time, sequence) → appsrc → tee
+   → nvvidconv (NVMM) → nvv4l2h265enc → h265parse → splitmuxsink (Matroska segments)
+   → preview:     rate-limited nvvidconv → RGBA appsink          (leaky, 1 buffer)
+   → quality:     160×128 grey at ~1 Hz → appsink                (leaky, 1 buffer)
+   → mount guard: videorate ≤ 4 Hz → queue leaky → 640×512 grey (leaky, 1 buffer)</code></pre>
+<ul>
+  <li><strong>Encoding</strong> is NVENC H.265 at 20 Mbit/s per camera, a keyframe every second, no B-frames and no reordering. Segments are keyframe-aligned (default 300 s) so a session splits into files with no frame gaps.</li>
+  <li><strong><code>frames.csv</code></strong> is written by a probe <em>after</em> the encoder, so every row is a frame that reached the muxer: row <em>n</em> is the <em>n</em>-th video frame of that camera across its segments, by construction. Matroska rounds timestamps to 1 ms, so <code>frames.csv</code> (driver time, TSC time, sequence) is the timing authority and the container's timestamps are used only to seek.</li>
+  <li><strong>Side branches</strong> are leaky with a one-buffer appsink: if analysis falls behind, frames are dropped from the branch, never from the recording. The mount-guard branch is rate-limited <em>before</em> its queue, so the colour conversion runs only 4 times a second.</li>
+  <li><strong>Drops</strong> are gaps in the driver's sequence numbers, so a lost frame is detected even if nothing downstream notices.</li>
+</ul>
+
+<h2 id="hardware-frame-sync">Hardware frame sync</h2>
+<div class="diagram"><svg class="dg" viewBox="0 0 960 190" role="img" aria-labelledby="fs-t">
+<title id="fs-t">Frame sync: the deserializer's trigger reaches every sensor over the GMSL2 back-channel</title>
+<defs><marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ar hi" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<rect class="bx" x="16" y="20" width="170" height="60" rx="7"/><text x="28" y="44">SW2 = internal</text><text class="s" x="28" y="64">on-board PWM MCU, 30 Hz</text>
+<rect class="bx" x="16" y="100" width="170" height="60" rx="7"/><text x="28" y="124">SW2 = external</text><text class="s" x="28" y="144">1.8 V trigger input, 30 Hz</text>
+<rect class="bx hi" x="236" y="58" width="170" height="64" rx="7"/><text x="248" y="82">deserializer FSIN</text><text class="s" x="248" y="102">one pulse for all ports</text>
+<rect class="bx" x="456" y="58" width="170" height="64" rx="7"/><text x="468" y="82">GMSL2 back-channel</text><text class="s" x="468" y="102">to each camera</text>
+<rect class="bx hi" x="676" y="20" width="268" height="60" rx="7"/><text x="688" y="44">6 sensors, frame_sync_mode = 1</text><text class="s" x="688" y="64">readout starts on the FSIN edge</text>
+<rect class="bx" x="676" y="100" width="268" height="60" rx="7"/><text x="688" y="124">Tegra VI: end-of-frame stamp</text><text class="s" x="688" y="144">SoC TSC, shared by all six</text>
+<path class="ln hi" d="M186,50 L234,80" marker-end="url(#b1)"/><path class="ln" d="M186,130 L234,100"/>
+<path class="ln hi" d="M406,90 L454,90" marker-end="url(#b1)"/>
+<path class="ln hi" d="M626,90 L674,52" marker-end="url(#b1)"/>
+<path class="ln hi" d="M810,80 L810,98" marker-end="url(#b1)"/>
+</svg></div>
+<p>The ISX031 supports a readout trigger: with <code>frame_sync_mode=1</code> the sensor starts its readout on an edge of the deserializer's FSIN pulse instead of its own crystal. Two independent settings must both be right: <strong>SW2</strong>, a physical switch on the deserializer board that selects the on-board generator or an external input, and <strong><code>frame_sync_mode</code></strong>, a per-camera driver control that defaults to 0 and is lost at every reboot or driver reload. Argus uses the internal generator.</p>
+
+<h3>Proving the lock</h3>
+<p>Free-running, the cameras share a clock through the deserializer, so they do not drift, but each starts at an arbitrary phase: over six restarts the worst spread was 22.4, 24.1, 25.9, 27.5, 28.2 and 31.5 ms — always under one frame period, never the same twice. A tight spread could therefore happen by luck, so Argus judges the lock continuously from driver timestamps of every frame set:</p>
+<div class="table"><table>
+<tr><th></th><th class="num">Free-running</th><th class="num">Sync on</th></tr>
+<tr><td>Median spread between the six cameras</td><td class="num">~20–24 ms</td><td class="num"><strong>29 µs</strong></td></tr>
+<tr><td>p95 spread</td><td class="num">—</td><td class="num">36–38 µs</td></tr>
+<tr><td>Per-camera offset</td><td class="num">−13.7 … +12.6 ms</td><td class="num">single-digit µs</td></tr>
+<tr><td>Dropped frames</td><td class="num">0</td><td class="num">0</td></tr>
+</table></div>
+<p>The verdict is written to <code>sync.csv</code> every second: <span class="pill ok">LOCKED</span> below 100 µs (<code>lock_warn_us</code>), <span class="pill warn">DEGRADED</span> below 300 µs (<code>lock_fail_us</code>), then PARTIAL or FREE-RUN. With sync required, a lost lock is a FAIL.</p>
+
+<h3>Turning it on safely: the warm start</h3>
+<p>Sync was not a matter of setting one control. In order, the team found that:</p>
+<ol>
+  <li><strong>With SW2 on external and nothing on the input, the sensors starve:</strong> bursts of 3–4 frames separated by ~2.5 s stalls and <em>“Error in ISP, Need to reset”</em> in the kernel log. SW2 must be on internal unless a 30 Hz, 1.8 V trigger is wired.</li>
+  <li><strong>On the first deserializer board, the FSIN trigger missed edges:</strong> about 8 dropped frames per minute rig-wide, always two-frame jumps, clustered by deserializer. After the board was serviced, the same test gave 0 drops in 2 minutes.</li>
+  <li><strong>Enabling sync on cold sensors breaks the rig.</strong> A boot service that set <code>frame_sync_mode=1</code> before anything had streamed left four of six cameras delivering zero frames, with a restart storm. The same boot with sync off recorded cleanly; the same setting applied after the cameras had streamed once worked. A one-camera smoke test does not reproduce it — only six cameras at once do.</li>
+</ol>
+<p>So <code>avrig sync on</code> always does a warm start: if nothing is streaming, it streams all six free-running for ~2 s, stops them, sets <code>frame_sync_mode=1</code> on each camera, <strong>reads it back</strong> (the driver can clamp silently), restarts the streams and verifies the lock. The boot service (<code>avrig sync on --boot</code>) first waits up to 120 s for all six cameras to enumerate, retries once if the lock fails, and otherwise leaves the rig free-running so that preflight blocks recording until an operator acts. Every attempt is written to the audit log.</p>
+<div class="warnbox"><p>The warm-start boot path is the result of these experiments. It has been run by hand on the repaired hardware many times; a full cold boot through the installed service still has to be confirmed on this rig — check <code>journalctl -u avrig-boot -b</code> after the first reboot.</p></div>
+
+<h2 id="clock-model">Clock model</h2>
+<div class="diagram"><svg class="dg" viewBox="0 0 960 200" role="img" aria-labelledby="ck-t">
+<title id="ck-t">Clock chain: TSC to MONOTONIC_RAW to MONOTONIC to UTC</title>
+<defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ar" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<rect class="bx hi" x="16" y="24" width="200" height="66" rx="7"/><text x="28" y="48">camera: SoC TSC</text><text class="s" x="28" y="68">end-of-frame, ~15 µs jitter</text>
+<rect class="bx" x="262" y="24" width="200" height="66" rx="7"/><text x="274" y="48">MONOTONIC_RAW</text><text class="s" x="274" y="68">constant offset, ±5 µs / 50 s</text>
+<rect class="bx" x="508" y="24" width="200" height="66" rx="7"/><text x="520" y="48">CLOCK_MONOTONIC</text><text class="s" x="520" y="68">+ chrony slew, read at dequeue</text>
+<rect class="bx hi" x="754" y="24" width="190" height="66" rx="7"/><text x="766" y="48">UTC</text><text class="s" x="766" y="68">clock.csv pairs every 2 s</text>
+<path class="ln" d="M216,57 L260,57" marker-end="url(#c1)"/><path class="ln" d="M462,57 L506,57" marker-end="url(#c1)"/><path class="ln" d="M708,57 L752,57" marker-end="url(#c1)"/>
+<rect class="bx" x="262" y="122" width="200" height="56" rx="7"/><text x="274" y="146">IMU SampleTimeFine</text><text class="s" x="274" y="164">fitted to MONOTONIC</text>
+<rect class="bx" x="508" y="122" width="200" height="56" rx="7"/><text x="520" y="146">GNSS fix time</text><text class="s" x="520" y="164">via gpsd, at the fix's own time</text>
+<rect class="bx" x="754" y="122" width="190" height="56" rx="7"/><text x="766" y="146">chrony</text><text class="s" x="766" y="164">GNSS-disciplined with a fix</text>
+<path class="ln" d="M462,150 L560,92" marker-end="url(#c1)"/><path class="ln" d="M610,122 L610,92" marker-end="url(#c1)"/><path class="ln" d="M850,122 L850,92" marker-end="url(#c1)"/>
+</svg></div>
+<ul>
+  <li><strong>TSC → host.</strong> Measured on this rig, <code>TSC − CLOCK_MONOTONIC_RAW</code> is constant to ±5 µs over 50 s (one oscillator), while plain <code>MONOTONIC</code> is slewed by chrony (~13 ppm). So <code>mono = tsc − offset + (MONOTONIC − MONOTONIC_RAW)</code>, with the second term read back-to-back at each dequeue. The per-boot <code>offset</code> is estimated as the maximum of <code>tsc − dequeue_raw</code>: a frame can never be dequeued before it ends, so the maximum approaches the true offset from below, to within the minimum interrupt-to-dequeue latency. All cameras share the TSC, so inter-camera alignment is exact.</li>
+  <li><strong>IMU.</strong> The MTi's own sample clock (<code>SampleTimeFine</code>) is fitted to the host clock, so the IMU's USB latency does not become timestamp jitter.</li>
+  <li><strong>GNSS and UTC.</strong> <code>clock.csv</code> pairs <code>MONOTONIC</code>, <code>MONOTONIC_RAW</code> and <code>REALTIME</code> every 2 s; <code>utc_ns = mono_ns + (real_ns − mono_ns)</code> interpolated. With a GNSS fix and the GNSS clock installed, chrony disciplines realtime from the receiver (via gpsd's SHM refclock), and the CLOCK chip shows it.</li>
+  <li><strong>Time marks (optional).</strong> With the camera trigger wired through a level shifter to the receiver's EXTINT input, every trigger edge is time-stamped in GNSS time (UBX-TIM-TM2), and <code>verify</code> fits TSC → GNSS time per frame.</li>
+</ul>
+<p>The mapping and its parameters are written to <code>manifest.json → timebase</code> and <code>timing</code>, and <code>clock.csv</code> keeps the raw values, so it can be redone offline.</p>
+
+<h2 id="imu-and-gnss">IMU and GNSS</h2>
+<ul>
+  <li><strong>IMU:</strong> Xsens Xbus / MTData2 frames, checksum-verified; packet-counter gaps are counted as lost samples; the status word (self-test, filter valid, SyncIn marker) is recorded in <code>imu.csv</code>. The FTDI latency timer is set to 1 ms by a udev rule — with the factory 16 ms, host-timestamp residuals would be near 52 ms instead of the measured 1.18 ms (p95).</li>
+  <li><strong>GNSS:</strong> <code>gpsd</code> keeps owning the receiver (it also feeds chrony). Argus reads fixes from gpsd's JSON and taps the binary UBX stream through gpsd's raw watch for the raw-measurement log (<code>gnss_raw.ubx</code>, for PPK), interference reports (MON-RF, NAV-STATUS) and time marks. RTK corrections from an NTRIP caster are CRC-checked and written to the receiver <em>through</em> gpsd, so no second process ever opens the port.</li>
+</ul>
+
+<h2 id="supervision-and-recovery">Supervision and recovery</h2>
+<ul>
+  <li><strong>One camera, one thread, one pipeline.</strong> A camera fault (no frames, a pipeline error, a driver reset) is contained to that camera.</li>
+  <li><strong>Supervisor every 0.5 s.</strong> A camera with no frames for <code>stall_s</code> (1.0 s) is restarted alone, with exponential back-off. Measured with three injected stalls: frames back 2.1–2.4 s after the last good frame, the other five untouched, re-locked at ~29 µs. A restarted camera writes a new segment run (<code>_rNN_</code>), so the frame-to-file mapping stays exact.</li>
+  <li><strong>Safe writes.</strong> Every file has exactly one writer (no locks). Each writer flushes to the OS at least once a second, and the supervisor fsyncs every file at each checkpoint; <code>manifest.json</code> is replaced atomically. A write error (disk full, I/O error) stops the recording safely, and low disk stops it before it runs out. A SIGKILL in the middle of a recording leaves a usable session — this is tested.</li>
+  <li><strong>One instance.</strong> An instance lock stops two Argus processes from fighting over the cameras.</li>
+  <li><strong>Audit log.</strong> <code>~/.local/state/avrig/audit.log</code>: one JSON line per operator or lifecycle action (record start / stop / refused, sync, offload, prune, calibration).</li>
+</ul>
+
+<h2 id="health-and-preflight">Health and preflight</h2>
+<p>One function evaluates the whole rig. The CLI exit codes, the GUI chips, the phone page and the recording preflight all come from it, so they can never disagree.</p>
+<div class="table"><table>
+<tr><th>Level</th><th>Examples</th><th>Effect</th></tr>
+<tr><td><span class="pill fail">FAIL</span></td><td>a camera missing, failed or stalled; sync required but off or lost; IMU silent (when required); disk below the minimum; a temperature over its limit</td><td>Blocks recording. Recording anyway needs an explicit force, and the session is marked as forced.</td></tr>
+<tr><td><span class="pill warn">WARN</span></td><td>sync DEGRADED; a camera below its frame rate or dropping; image quality flags; no GNSS fix; clock not GNSS; no or old calibration; a camera moved on its mount; antenna fault, jamming or spoofing; RTK corrections lost</td><td>Shown on the chips and in the report; recording continues.</td></tr>
+</table></div>
+<p>Preflight starts the cameras if needed and measures for a moment, so the rate, stalls and lock are measured, not assumed.</p>
+
+<h2 id="session-format">Session format</h2>
+<pre><code>&lt;YYYYMMDD-HHMMSS&gt;_&lt;label&gt;/
+  manifest.json      status, config, timing model, per-camera stats, preflight, metadata,
+                     markers, calibration id, sync verdict (checkpointed while recording)
+  meta.json          operator / vehicle / route / conditions / tags / notes
+  &lt;camera&gt;/          &lt;camera&gt;_rNN_NNN.mkv segments + frames.csv (frame, mono_ns, tsc_ns, seq)
+  segments.csv       segment file → first / last frame time
+  imu.csv  gnss.csv  clock.csv (MONOTONIC ↔ MONOTONIC_RAW ↔ REALTIME every 2 s)
+  markers.csv        operator and automatic markers, at capture-clock time
+  sync.csv           1 Hz: verdict, spread median / p95 / max, per-camera fps and offset
+  host.csv           5 s: CPU, GPU, memory, load, temperatures, disk free, write rate
+  quality.csv        ~1 Hz per camera: brightness, clipping, sharpness, flat area, flags
+  gnss_raw.ubx       complete receiver log for PPK (when enabled)
+  gnss_rf.csv        1 Hz receiver interference / antenna state (when enabled)
+  can.csv  timemarks.csv   only when enabled
+  events.log  verify.json  report.html  SHA256SUMS  offload.json
+  -- added by the lab tools after the drive --
+  trajectory.csv/.json  tags.csv  detections.csv  embeddings.npy/.csv  scene.csv
+  tracks2d.csv  labels3d.csv/.json  reviewed_tracks.csv  visual_speed.csv  auto_events.csv</code></pre>
+<p>Files added after an offload make <code>prune</code> refuse that session until it is offloaded again — by design.</p>
+
+<h2 id="offline-work">Offline work and the GPU</h2>
+<p>Everything heavy runs after the drive at the lowest CPU and I/O priority, refuses to start while recording, and stops itself if a recording starts. The perception models run as TensorRT FP16 engines through a small runner on the CUDA driver API with unified memory (on Orin, CPU and GPU share DRAM, so nothing is copied). One rule shaped that runner: <strong>on Jetson, CPU code must not touch managed memory while any GPU kernel of the same process is running</strong>. Running models from parallel threads violated it and crashed the process, so every TensorRT call goes through one GPU lock, held through the whole inference.</p>
+<div class="pager"><a href="getting-started.html"><small>Previous</small>Get started</a><a class="next" href="features.html"><small>Next</small>Operator</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

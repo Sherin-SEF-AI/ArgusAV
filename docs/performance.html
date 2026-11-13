@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Performance and accuracy - Argus</title>
+<meta name="description" content="Measured load of every feature on the Jetson, simulated accuracy, and the test suite.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html" aria-current="page">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#recording">Recording</a><a href="#load-of-each-feature">Load of each feature</a><a href="#accuracy-on-simulated-data">Accuracy on simulated data</a><a href="#real-data-checks">Real-data checks</a><a href="#tests">Tests</a></aside><article class="content"><div class="kicker">Performance</div>
+<h1>What it costs, how well it works</h1>
+<p class="lead">Every number on this page was measured on the rig (a Jetson AGX Orin 64 GB, 12 CPU cores, on the bench with the deserializer's internal trigger and no GNSS fix), or — where marked — on simulated data with exact truth. Nothing is estimated.</p>
+
+<h2 id="recording">Recording</h2>
+<div class="table"><table>
+<tr><th>Test</th><th>Result</th></tr>
+<tr><td><code>avrig check</code>, 15 s</td><td>29.99 fps on all six, jitter 16–17 µs, spread <strong>median 29 µs / p95 36 µs</strong>, LOCKED, 0 drops</td></tr>
+<tr><td>61 s recording + <code>verify</code></td><td>frames.csv == video frames on all six, <strong>0 drops</strong>, alignment 29 µs median / 38 µs p95</td></tr>
+<tr><td>4-minute soak</td><td>LOCKED for 234 of 235 s, 1 s spread median 29 µs (worst 37 µs), 0 drops, 0 restarts, CPU 28 %, 54 → 57 °C</td></tr>
+<tr><td>CPU while recording six cameras (30 s)</td><td><strong>180 %</strong> of one core (of 12): ~3 % of one core more than the bare capture core it was derived from</td></tr>
+<tr><td>Stall recovery, 3 injected stalls</td><td>frames back <strong>2.1–2.4 s</strong> after the last good frame; the other five untouched; re-locked at ~29 µs</td></tr>
+<tr><td>Replay of a real session</td><td>seek ~0.5 s; all six views within ±30 µs; 1× playback keeps up</td></tr>
+</table></div>
+
+<h2 id="load-of-each-feature">Load of each feature</h2>
+<p>Live features were measured as A/B recordings with the feature on and off, comparing the recorder process's own CPU time, so other load on the machine does not distort the result. Offline jobs are wall-clock times for real sessions.</p>
+<div class="table"><table>
+<tr><th>Feature</th><th>Runs</th><th>Measured cost</th></tr>
+<tr><td>Automatic events + raw GNSS log</td><td>while recording</td><td>165 % → 166 % of one core (~1 %), LOCKED ~28 µs, 0 drops (2 × 30 s A/B)</td></tr>
+<tr><td>Camera-mount guard</td><td>while recording</td><td><strong>+7–8 % of one core</strong> (the 640×512 frame branch; the guard itself 0.0 % while parked); LOCKED 58/58 s, 0 drops (4 × 60 s A/B)</td></tr>
+<tr><td>GNSS interference watch</td><td>while recording</td><td>too small to measure (1 Hz, &lt;100 bytes/s)</td></tr>
+<tr><td>Foxglove live view</td><td>only with a viewer</td><td>recorder CPU unchanged (164 %) with a viewer on every topic: previews ~5 fps × 6, IMU 100 Hz, status 1 Hz; LOCKED, 0 drops</td></tr>
+<tr><td>Image quality</td><td>while recording</td><td>&lt;1 ms of numpy per thumbnail, one per camera per second</td></tr>
+<tr><td>Search embeddings (CLIP)</td><td>after the drive</td><td>61 s session: 4 s (cached) / 21 s (cold disk); 5.6 min session: 91 s cold</td></tr>
+<tr><td>3D pre-labels</td><td>after the drive</td><td>33 s for 61 s × 6 cameras at 10 Hz (3 workers, one GPU lock)</td></tr>
+<tr><td>Offline mount check</td><td>after the drive</td><td>25 s for 61 s × 6 cameras (parallel NVDEC)</td></tr>
+<tr><td>Visual speed</td><td>after the drive</td><td>~37 ms of one core per frame pair: about 22 minutes of one core per hour of driving</td></tr>
+<tr><td>Object tagging</td><td>after the drive</td><td>5.6 min × 6 cameras at 2 fps: 118 s (3× faster than real time)</td></tr>
+<tr><td>Privacy blurring</td><td>after the drive</td><td>61 s × 6 cameras (10,876 frames): 494 s (22 fps, 3 workers), every frame kept</td></tr>
+<tr><td>MCAP export</td><td>after the drive</td><td>5.6 min session: 27 s, 5.03 GB for 5.02 GB of video; index seek ~0.02 s</td></tr>
+<tr><td>MCAP clip from a search hit</td><td>after the drive</td><td>10 s clip in 6.8 s; decodes on NVDEC from its first frame</td></tr>
+</table></div>
+
+<h3>Model latency on the Orin GPU (TensorRT FP16)</h3>
+<div class="table"><table>
+<tr><th>Model</th><th>Licence</th><th class="num">Latency</th></tr>
+<tr><td>YOLOX-s objects (640 px)</td><td>Apache-2.0</td><td class="num">3.2–3.4 ms</td></tr>
+<tr><td>Number-plate detector (YOLOv9-t)</td><td>MIT</td><td class="num">5.5 ms</td></tr>
+<tr><td>YuNet faces</td><td>MIT</td><td class="num">~3 ms</td></tr>
+<tr><td>CLIP ViT-B/32 image</td><td>MIT</td><td class="num">0.7 ms / frame</td></tr>
+<tr><td>Depth Anything V2 Small (518×420)</td><td>Apache-2.0</td><td class="num">5.6 ms / frame in batches of 6</td></tr>
+</table></div>
+<p>Model files are downloaded with pinned revisions and checksums and are not part of the repository. The Base and Large variants of Depth Anything V2 are non-commercial and deliberately not used.</p>
+
+<h2 id="accuracy-on-simulated-data">Accuracy on simulated data</h2>
+<p>These results use rendered images and simulated drives where the truth is known exactly. They prove the algorithms; they are not yet proof on real roads (see <a href="lessons.html#not-yet-verified-on-hardware">Not yet verified</a>).</p>
+<div class="table"><table>
+<tr><th>What</th><th>Result</th></tr>
+<tr><td>Trajectory, 200 s drive, 1 Hz GNSS with 1.5 m RMS error</td><td>horizontal 0.37–0.42 m RMS, yaw 0.06–0.08° median, roll / pitch ~0.2°; the reported 1-σ matched the real error</td></tr>
+<tr><td>IMU mounting estimated from the drive (4 mountings incl. 90° and −150° yaw)</td><td>yaw within 0.1°</td></tr>
+<tr><td>Camera calibration, pinhole and fisheye rendered at known poses</td><td>pinhole focal length within 0.03 %, centre within 0.6 px; fisheye within 0.33 px median over the image</td></tr>
+<tr><td>Camera-to-camera extrinsics (pinhole + fisheye, 35° apart)</td><td>0.03° and 1.3 mm</td></tr>
+<tr><td>Mount guard: three cameras (wide, side, narrow rear), IMU mounted upside down</td><td>learned up / forward directions within 1°; a 2.5° knock on one camera flagged (1.5–3.5° measured), the others stayed “ok”, no false alarm while evidence accumulated</td></tr>
+<tr><td>Visual speed on a rendered road</td><td>±1.5 % from 5 to 45 m/s; yaw rate within 0.3°/s</td></tr>
+<tr><td>120 s GNSS outage (1.27 km), drifting accelerometer bias</td><td>max position error 5.2 m (IMU) → 0.57 m (IMU + visual speed); 2 % scale error recovered within 0.07 %</td></tr>
+<tr><td>3D lift from exact boxes (3 cameras, cars at 5–60 m)</td><td>median 0.2 m front cameras, 0.5 m side camera; 4 objects merged across two overlapping cameras; moving car's speed within 1 m/s</td></tr>
+<tr><td>Map layers</td><td>rough road ranked &gt;3× smooth (braking excluded); pothole found at its second; landmarks within 0.6 m; a removed sign reported after 2 passes</td></tr>
+</table></div>
+
+<h2 id="real-data-checks">Real-data checks</h2>
+<ul>
+  <li><strong>Camera-moved check</strong> on a real scene: 0.0 px on all six unchanged views; a simulated 6 px bump reported at 5.98 px.</li>
+  <li><strong>Search by meaning</strong> on recorded office footage: text queries for people standing found them; black frames no longer match every query.</li>
+  <li><strong>3D pre-labels</strong> on real footage with nominal geometry: 11 people found and tracked in a 61 s session.</li>
+  <li><strong>GNSS interference</strong> on this receiver: MON-RF (indicator, antenna, AGC) and NAV-STATUS (spoofing) work; the jamming state is not in this firmware.</li>
+</ul>
+
+<h2 id="tests">Tests</h2>
+<pre><code>python3 -m pytest -q tests        <span class="c"># 102 passed</span></code></pre>
+<ul>
+  <li><strong>Unit</strong> — sync verdicts, quality metrics, metadata, offload / prune safety (including same-size corruption and files added after offload), MCAP index / CRC structure and CDR layout, IMU sample-clock back-fill, UBX and Xsens framing, CAN frames, the calibration registry, config and health rules.</li>
+  <li><strong>Lab</strong> — UBX raw tap, RTCM framing and CRC-24Q, the NTRIP client against a fake caster and fake gpsd, automatic events on a synthetic drive, trends, catalog and search, calibration of rendered lenses, trajectory accuracy and IMU mounting, LED-sync analysis, the hands-free policy, phone markers, the fleet page, GPU detectors and blurring.</li>
+  <li><strong>Simulated cameras on real GStreamer + NVENC</strong> — exact frame accounting across segments, stall and pipeline-error isolation, write-error safe stop, SIGKILL mid-recording, markers / verify / report, replay across a segment boundary, MCAP export, remote status. These recordings run with the mount-guard branch on, so a stall in it fails a test.</li>
+  <li><strong>v3</strong> — the mount guard on rendered scenes (learning, a 2.5° knock, no false alarm, nothing analysed while parked), MON-RF / SEC-SIG / NAV-STATUS parsing, the CLIP tokenizer against reference ids, index search / rarity / curation / de-duplication, 3D lift + tracking + merge, the depth-scale fit, visual speed up to 45 m/s, a GNSS outage bridged by visual speed, map layers, the Foxglove server (protocol, token, slow viewers), and end-to-end nuScenes 3D tables, Nerfstudio export, Foxglove replay and the offline mount check.</li>
+</ul>
+<p>Tests write the audit log and recording flag to a temporary directory, never the operator's.</p>
+<div class="pager"><a href="lab.html"><small>Previous</small>AV lab</a><a class="next" href="cli.html"><small>Next</small>Commands</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

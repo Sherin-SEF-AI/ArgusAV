@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting - Argus</title>
+<meta name="description" content="Failure modes seen on this rig, their signature, and the fix.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html" aria-current="page">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#argus-will-not-start">Argus will not start</a><a href="#recording-is-blocked">Recording is blocked</a><a href="#cameras-stream-but-are-not-simultaneous">Cameras stream but are not simultaneous</a><a href="#cameras-starve-with-sync-on">Cameras starve with sync on</a><a href="#a-camera-is-missing">A camera is missing</a><a href="#no-cameras-after-a-system-update">No cameras after a system update</a><a href="#every-camera-port-fails-at-the-serializer">Every camera port fails at the serializer</a><a href="#format-errors">Format errors</a><a href="#gnss-will-not-fix">GNSS will not fix</a><a href="#clock-is-not-gnss">Clock is not GNSS</a><a href="#lab-jobs">Lab jobs</a><a href="#foxglove-and-the-phone-page">Foxglove and the phone page</a></aside><article class="content"><div class="kicker">Troubleshooting</div>
+<h1>When something is wrong</h1>
+<p class="lead">Failure modes actually seen on this rig, how each one looks, and what fixed it. Start with <code>avrig check</code>: its health lines name the component and usually the fix.</p>
+
+<h2 id="argus-will-not-start">Argus will not start</h2>
+<h3>“Cameras busy” / another instance</h3>
+<p>A camera can be opened by one process at a time, and Argus holds an instance lock. Close any other capture tool, stop hands-free mode (<code>sudo systemctl stop avrig-auto</code>), and find a holder with:</p>
+<pre><code>fuser /dev/video0          <span class="c"># which process has the camera</span>
+pgrep -af avrig</code></pre>
+<p>Started from the desktop icon, the reason appears in a dialog. Never <code>kill -9</code> a process that is streaming: skipping stream-off can wedge the sensor until a reboot. Stop it with SIGINT / SIGTERM.</p>
+<h3>Config error</h3>
+<p>Every key in <code>~/.config/avrig.yaml</code> is validated and unknown keys are rejected; the message names the key and the allowed range.</p>
+
+<h2 id="recording-is-blocked">Recording is blocked</h2>
+<p>Preflight blocks recording on any FAIL. The ISSUES list in the GUI and the health lines of <code>avrig check</code> name it:</p>
+<div class="table"><table>
+<tr><th>Message</th><th>Fix</th></tr>
+<tr><td>hardware frame sync is OFF</td><td><code>avrig sync on</code> (the boot service normally does this; check <code>journalctl -u avrig-boot -b</code>)</td></tr>
+<tr><td>found 5/6 cameras · a camera failed / stalled</td><td>See “A camera is missing” below</td></tr>
+<tr><td>only N GB free</td><td>Offload and prune (<code>avrig offload</code>, <code>avrig prune</code>)</td></tr>
+<tr><td>… at N °C (limit …)</td><td>Improve cooling; check the fan mode</td></tr>
+<tr><td>IMU silent</td><td>Check the USB cable; the port (<code>/dev/ttyUSB0</code>) and the user's <code>dialout</code> group</td></tr>
+</table></div>
+
+<h2 id="cameras-stream-but-are-not-simultaneous">Cameras stream but are not simultaneous</h2>
+<p><strong>Signature:</strong> nominal fps, zero drops, everything looks healthy — but SYNC says FREE-RUN and the spread is tens of milliseconds. <code>frame_sync_mode</code> reset to 0 at the last reboot or driver reload. There is no other symptom, which is why Argus measures the lock every second and preflight requires it. Fix: <code>avrig sync on</code>.</p>
+
+<h2 id="cameras-starve-with-sync-on">Cameras starve with sync on</h2>
+<p><strong>Signature:</strong> ~1 fps in bursts of 3–4 frames separated by ~2.5 s stalls; the kernel log shows the sensor's ISP asking for a reset. The deserializer's trigger switch is on <em>external</em> and nothing is driving the trigger input. Move it back to internal, or wire a 30 Hz, 1.8 V trigger (through a level shifter — 3.3 V over-drives it).</p>
+
+<h2 id="a-camera-is-missing">A camera is missing</h2>
+<ul>
+  <li><strong><code>/dev/videoN</code> numbering is not stable.</strong> Plugging in another V4L2 device (a USB webcam) renumbers the cameras, and a camera that fails to probe shifts the others. Argus identifies cameras by the sensor's I²C bus and address in the device name (<code>isx031 9-0043</code> …), not by node number; <code>avrig wizard</code> verifies physical positions one lens at a time.</li>
+  <li><strong>To re-enumerate cameras, reboot.</strong> Reloading the driver can lose one port in a race with the deserializer's reset. Never write to the driver's sysfs <code>bind</code>/<code>unbind</code> — it panics the kernel.</li>
+  <li><strong>Two ports on the second deserializer are unpopulated</strong> on this rig; their probe failures at boot are expected.</li>
+</ul>
+
+<h2 id="no-cameras-after-a-system-update">No cameras after a system update</h2>
+<p><strong>Signature:</strong> <code>v4l2-ctl --list-devices</code> shows only <code>/dev/media0</code>. Two causes, possibly together:</p>
+<ol>
+  <li><strong>The device tree was replaced.</strong> An L4T package update overwrites the stock DTB that the camera overlay was merged into, and resets the boot entry. The rig avoids this by merging the overlay into a <em>separately named</em> DTB that L4T does not own, and pointing the boot entry at it. Check: <code>grep -E "DEFAULT|FDT|OVERLAYS" /boot/extlinux/extlinux.conf</code>.</li>
+  <li><strong>The vendor's patched camera modules were replaced</strong> by stock builds, and the sensor driver fails with “Unknown symbol” (<code>journalctl -k -b | grep "Unknown symbol"</code>). Reinstall the vendor modules for the running kernel, then reboot.</li>
+</ol>
+<p>The camera driver package is locked to both the L4T release and the kernel version; after either changes, install the matching package.</p>
+
+<h2 id="every-camera-port-fails-at-the-serializer">Every camera port fails at the serializer</h2>
+<p><strong>Signature:</strong> every port on both deserializers fails on the first register write (I²C NACK, probe error −5), while the frame-sync MCU on the always-on bus still answers. That is a hardware fault — the board has power but its camera section does not. Check the deserializer board's power input and reseat the board cable and the coax. On this rig both deserializers failed this way over several days and the board was serviced.</p>
+
+<h2 id="format-errors">Format errors</h2>
+<p>The sensor is 1920 wide, never 2048. V4L2 silently clamps an out-of-range request (asking for 2048 returns 1920 with success), while GStreamer refuses with <code>not-negotiated</code>. Argus checks the negotiated format of every camera.</p>
+<p><em>“Signal lost — No input source was detected”</em> from GStreamer is benign on this platform when frames are flowing: the plugin queries an input concept the Tegra driver does not implement. It matters only together with zero frames — the cold-sync failure.</p>
+
+<h2 id="gnss-will-not-fix">GNSS will not fix</h2>
+<p>Do not assume “indoors”. Check the receiver's RF report (<code>avrig gnss --rf-enable</code>, then the RF chip or <code>gnss_rf.csv</code>): an antenna reported OK with a pinned-low AGC and a high jamming indicator means broadband interference. On this rig that was the USB 3 hub the receiver was plugged into — USB 3 SuperSpeed noise sits on the GPS L1 band. Moving the receiver off the USB 3 hub and the antenna to open sky fixed it. <code>gpsd</code> owns the serial port: use <code>gpspipe -w</code>, not the device, to look at it.</p>
+
+<h2 id="clock-is-not-gnss">Clock is not GNSS</h2>
+<p>The CLOCK chip stays amber until chrony disciplines from the GNSS receiver, which needs a fix and the one-time GNSS clock setup (<code>sudo bash setup/gnss-clock/install.sh</code>). Inter-camera alignment does not depend on it — that rides the shared TSC — but absolute UTC does. When looking for a PPS source, read <code>/sys/class/pps/*/name</code>: <code>/dev/pps0</code> on a stock system is the kernel's synthetic <code>ktimer</code>, and binding to it produces convincing and entirely fictitious synchronisation.</p>
+
+<h2 id="lab-jobs">Lab jobs</h2>
+<ul>
+  <li><strong>“Recording in progress”</strong> — offline jobs refuse to start while recording and stop if one starts. Wait for the recording to end.</li>
+  <li><strong>Models missing</strong> — run <code>avrig models --fetch --build</code> once (~750 MB, ~30 minutes of engine building).</li>
+  <li><strong>No calibration</strong> — 3D labels, visual speed, landmarks, reconstruction and datasets with camera poses need a registered calibration; some accept <code>--nominal-geometry</code> for rough, clearly marked results.</li>
+  <li><strong>No trajectory</strong> — 3D labels in the world frame, map landmarks and reconstruction need <code>avrig trajectory</code> first, which needs a drive with a GNSS fix.</li>
+</ul>
+
+<h2 id="foxglove-and-the-phone-page">Foxglove and the phone page</h2>
+<ul>
+  <li>Foxglove: <em>Open connection</em> → <code>ws://HOST:8765</code>. By default the server binds to 127.0.0.1; for another machine set <code>foxglove_bind: 0.0.0.0</code> and a token, and connect with <code>?token=</code>.</li>
+  <li>Phone page: <code>http://RIG:8088/</code> with <code>?token=</code> when <code>remote_token</code> is set. Marker buttons need both <code>remote_markers: true</code> and a token.</li>
+</ul>
+<div class="pager"><a href="cli.html"><small>Previous</small>Commands</a><a class="next" href="lessons.html"><small>Next</small>Eng. notes</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

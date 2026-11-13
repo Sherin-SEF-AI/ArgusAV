@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# models, engines and recorded data never go into the repository
+*.onnx
+*.engine
+*.mcap
+*.h265
+*.mkv
+/~/

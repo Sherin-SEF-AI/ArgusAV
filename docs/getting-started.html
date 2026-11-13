@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started - Argus</title>
+<meta name="description" content="Hardware, installation, frame sync at boot, the desktop shortcut and the daily commands.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html" aria-current="page">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#hardware">Hardware</a><a href="#install">Install</a><a href="#frame-sync-at-boot">Frame sync at boot</a><a href="#desktop-shortcut">Desktop shortcut</a><a href="#every-day">Every day</a><a href="#a-first-recording">A first recording</a><a href="#optional-root-setup">Optional root setup</a></aside><article class="content"><div class="kicker">Getting started</div>
+<h1>Install, boot, record</h1>
+<p class="lead">Argus runs on the rig itself. After a one-time setup, a normal day is two commands: <code>avrig check</code> to confirm the rig, and <code>avrig gui</code> (or the desktop icon) to record.</p>
+
+<h2 id="hardware">Hardware</h2>
+<div class="table"><table>
+<tr><th>Component</th><th>Part</th><th>Notes</th></tr>
+<tr><td>Compute</td><td>NVIDIA Jetson AGX Orin 64 GB Developer Kit</td><td>JetPack 7.2 / L4T R39.2.0, Ubuntu 24.04 (aarch64), kernel 6.8.12-tegra, Python 3.12, GStreamer 1.24</td></tr>
+<tr><td>Cameras</td><td>6 × e-con STURDeCAM31 (Sony ISX031, 3 MP)</td><td>1920×1536 UYVY at 30 fps; 4 wide (~128.7° horizontal), 2 narrow (~54°)</td></tr>
+<tr><td>Deserializer</td><td>e-CAM_CUOAGX_DESER_8</td><td>2 × quad GMSL2, FAKRA; generates the frame-sync trigger</td></tr>
+<tr><td>IMU</td><td>Xsens MTi-3</td><td>100 Hz over USB serial (FTDI)</td></tr>
+<tr><td>GNSS</td><td>u-blox NEO-F9P</td><td>multi-band, served by <code>gpsd</code></td></tr>
+<tr><td>Optional</td><td>CAN transceiver, NTRIP account, GPIO LED</td><td>wheel speed / RTK / optical sync check and status LED</td></tr>
+</table></div>
+<p>The camera driver package comes from the camera vendor and is version-locked to both the L4T release and the kernel. It is not part of this repository; install the package that matches your L4T release first and confirm all six cameras enumerate:</p>
+<pre><code>v4l2-ctl --list-devices        <span class="c"># expect six "vi-output, isx031 &lt;bus&gt;-&lt;addr&gt;" nodes</span></code></pre>
+
+<h2 id="install">Install</h2>
+<p>Argus has no build step and no Python packaging: it runs from the source tree. The dependencies are the ones JetPack and Ubuntu already provide.</p>
+<pre><code><span class="c"># system packages (most are already on a JetPack image)</span>
+sudo apt install python3-numpy python3-yaml python3-opencv python3-pyqt6 \
+                 python3-gi gir1.2-gstreamer-1.0 gpsd gpsd-clients v4l-utils
+
+<span class="c"># the application</span>
+git clone https://github.com/Sherin-SEF-AI/ArgusAV.git ~/ArgusAV
+mkdir -p ~/.local/bin
+ln -s ~/ArgusAV/bin/avrig ~/.local/bin/avrig
+avrig --help</code></pre>
+<p>The user needs to be in the <code>video</code> group (cameras), <code>dialout</code> (IMU serial port) and, for the LED features, <code>gpio</code>. TensorRT comes with JetPack and is only needed for the AV-lab tools.</p>
+<p>Configuration lives in <code>~/.config/avrig.yaml</code>. Every key is validated and unknown keys are rejected, so a typo cannot silently fall back to a default. All keys, defaults and comments are in <code>avrig/config.py</code>. Sessions go to <code>~/avrig-sessions/</code>.</p>
+<pre><code><span class="c"># ~/.config/avrig.yaml - a typical rig</span>
+out_dir: ~/avrig-sessions
+require_frame_sync: true      <span class="c"># preflight FAILs if sync is off</span>
+remote_enable: true           <span class="c"># phone status page on the LAN</span>
+remote_token: change-me
+mount_guard: true             <span class="c"># default</span>
+gnss_interference: true       <span class="c"># default; also run `avrig gnss --rf-enable` once</span></code></pre>
+
+<h3>Perception models (optional, once)</h3>
+<p>The AV-lab tools use open-licence models that are downloaded, checksum-verified and compiled into TensorRT FP16 engines for this Jetson. About 750 MB of downloads and roughly 30 minutes of engine building, once:</p>
+<pre><code>avrig models --fetch --build</code></pre>
+
+<h2 id="frame-sync-at-boot">Frame sync at boot</h2>
+<p>Hardware frame sync is a per-camera driver setting (<code>frame_sync_mode</code>) that resets to 0 at every reboot. A rig that silently comes back unsynced looks perfect in every other way, so Argus installs a boot service that turns it on safely and checks the result:</p>
+<pre><code>sudo bash setup/avrig-install.sh --autostart
+sudo reboot
+<span class="c"># after the reboot, once:</span>
+journalctl -u avrig-boot -b --no-pager
+avrig sync status          <span class="c"># expect: frame_sync_mode [1, 1, 1, 1, 1, 1]</span></code></pre>
+<p>The service (<code>avrig-boot.service</code>, runs as your user) waits up to 120 s for all six cameras, <strong>streams them free-running first</strong> (warm start), then enables sync and verifies the lock. If the lock fails it retries once; if it still fails, the rig is left free-running and preflight blocks recording until someone runs <code>avrig sync on</code>. Setting sync on cold sensors has left cameras with no signal at all on this hardware — see <a href="how-it-works.html#hardware-frame-sync">How it works</a> — and a dead camera is worse than an unsynced rig that says so.</p>
+<p>Without the service, run <code>avrig sync on</code> once after each boot.</p>
+
+<h3>What <code>frame_sync_mode [1, 1, 1, 1, 1, 1]</code> means</h3>
+<p>One number per camera, in the rig's camera order (<code>front_wide, left, right, rear_wide, front_narrow, rear_narrow</code>). <strong>1</strong> = the camera waits for the shared trigger, so all six expose together; <strong>0</strong> = that camera runs on its own clock and drifts out of step. The setting only says sync is switched on — <code>avrig check</code> proves it is actually locked.</p>
+
+<h2 id="desktop-shortcut">Desktop shortcut</h2>
+<p>For an operator who should not need a terminal:</p>
+<pre><code>bash setup/install-desktop.sh            <span class="c"># desktop icon + app-menu entry (no root)</span>
+bash setup/install-desktop.sh --remove</code></pre>
+<p>The icon starts <code>bin/argus-launch</code>, which runs <code>avrig gui</code> and, if the application cannot start (cameras busy, another instance running, a config error), shows the reason in a dialog instead of losing it.</p>
+<div class="note"><p><strong>Auto-login (optional).</strong> On a rig that lives in a vehicle, the desktop can log in by itself at boot (GDM): add <code>AutomaticLoginEnable=true</code> and <code>AutomaticLogin=&lt;user&gt;</code> to the <code>[daemon]</code> section of <code>/etc/gdm3/custom.conf</code>. Anyone who powers the rig on then gets the desktop; <code>sudo</code> still needs the password. Frame sync does not depend on a login — the boot service runs either way.</p></div>
+
+<h2 id="every-day">Every day</h2>
+<pre><code>avrig check        <span class="c"># 10 s of streaming: sync, drops, IMU, GNSS, clock, quality, host, health</span>
+avrig gui          <span class="c"># or the desktop icon</span></code></pre>
+<p>Only one program can open the cameras. Close any other capture tool first; if hands-free mode is installed, <code>sudo systemctl stop avrig-auto</code> before opening the GUI.</p>
+
+<h3>Reading <code>avrig check</code></h3>
+<figure class="shot mid"><img src="img/check.png" alt="Terminal output of avrig check" loading="lazy" onerror="this.parentNode.remove()"><figcaption><code>avrig check</code> on the bench: all six at 29.99 fps, LOCKED, 0 drops.</figcaption></figure>
+<pre class="term"><code>frame_sync_mode [1, 1, 1, 1, 1, 1]
+camera        dev         state         fps     period   jitter    offset  drops  rst
+front_wide    /dev/video0 running     29.99   33.334ms     17us      +0us      0    0
+left          /dev/video1 running     29.99   33.334ms     17us      +6us      0    0
+right         /dev/video2 running     29.99   33.334ms     17us      +3us      0    0
+rear_wide     /dev/video3 running     29.99   33.334ms     17us      -6us      0    0
+front_narrow  /dev/video4 running     29.99   33.334ms     16us      +6us      0    0
+rear_narrow   /dev/video5 running     29.99   33.334ms     17us      -4us      0    0
+spread  median 14 us | p95 38 us | max 40 us  -&gt;  <span class="ok">LOCKED</span>
+IMU    100.0 Hz  1032 samples  0 lost  temp 28.2 C  clock drift settling  jitter 259 us
+GNSS   NO FIX  0/0 sats
+CLOCK  master NTP (offset +325 us)
+QUALITY ok
+HOST   cpu 20%  gpu 0%  mem 9%  cpu 50C soc0 47C gpu 45C tj 50C  disk free 514 GB
+  <span class="warn">WARN</span> [gnss] GNSS has no fix (0/0 satellites)
+         -&gt; the antenna needs open-sky view
+  <span class="warn">WARN</span> [clock] master clock is NTP, not GNSS
+  <span class="warn">WARN</span> [calibration] no active calibration recorded with sessions
+health: <span class="warn">WARN</span></code></pre>
+<dl class="defs">
+  <dt>fps / period / jitter</dt><dd>From the driver's capture timestamps. Jitter is the per-frame deviation from the camera's own period: ~15–17 µs is the hardware's floor.</dd>
+  <dt>offset</dt><dd>Each camera's mean offset from the reference camera. With sync on: single-digit µs. Free-running: milliseconds to tens of milliseconds, and different after every restart.</dd>
+  <dt>spread … LOCKED</dt><dd>Spread of the six capture times of one frame set. LOCKED below 100 µs, DEGRADED below 300 µs, then PARTIAL / FREE-RUN.</dd>
+  <dt>drops / rst</dt><dd>Gaps in the driver's sequence numbers, and camera restarts by the supervisor.</dd>
+  <dt>health</dt><dd>OK, WARN or FAIL. A FAIL (sync off, a camera missing, disk low, overheating) blocks recording. The three WARNs above are expected on a bench indoors: no sky for GNSS, so time comes from NTP; and no camera calibration registered yet.</dd>
+</dl>
+
+<h2 id="a-first-recording">A first recording</h2>
+<ol>
+  <li>Open the GUI. The chip bar should be green or amber; red chips name what blocks recording.</li>
+  <li><em>Info…</em> — operator and vehicle are required; route, weather, light, road, tags and notes are optional. Pick lists come from <code>~/.config/avrig/presets.yaml</code>.</li>
+  <li><em>Record</em>. Preflight streams for a moment, measures the lock and health, and starts only if nothing FAILs.</li>
+  <li>Mark events with <kbd>1</kbd>–<kbd>9</kbd> / <kbd>F1</kbd>–<kbd>F9</kbd> or the marker buttons.</li>
+  <li><em>Stop</em>, then <em>Sessions</em> → <em>Verify</em> and <em>Report</em>.</li>
+</ol>
+<p>From the terminal:</p>
+<pre><code>avrig record -t 600 --operator OP1 --vehicle VEH-01 --weather clear --light day
+avrig verify ~/avrig-sessions/&lt;session&gt; --report</code></pre>
+
+<h2 id="optional-root-setup">Optional root setup</h2>
+<p>All reversible, all in one script (<code>sudo bash setup/avrig-install.sh --status</code> shows what is installed):</p>
+<div class="table"><table>
+<tr><th>Option</th><th>Installs</th></tr>
+<tr><td><code>--autostart</code></td><td><code>avrig-boot.service</code>: warm-start frame sync at boot (above)</td></tr>
+<tr><td><code>--collection-mode</code></td><td>A root helper that, while recording, runs <code>jetson_clocks</code>, pauses the Docker containers and stops the services you list, then restores exactly what it changed. Then <code>collection_mode: true</code>.</td></tr>
+<tr><td><code>--can --bitrate N --ifaces "can0"</code></td><td>Brings the CAN interfaces up at boot; then <code>can_ifaces: [can0]</code></td></tr>
+<tr><td><code>--auto</code></td><td><code>avrig-auto.service</code>: hands-free recording when the vehicle drives</td></tr>
+<tr><td><code>--depot</code></td><td><code>avrig-depot.timer</code>: verified offload every 15 minutes when the destination is reachable</td></tr>
+<tr><td><code>--uninstall</code></td><td>Removes everything above</td></tr>
+</table></div>
+<p>The GNSS master clock (chrony disciplined from gpsd's SHM refclock) needs a GNSS fix and is a separate one-time step: <code>sudo bash setup/gnss-clock/install.sh</code> (it also installs udev rules that give the IMU a 1 ms FTDI latency timer); once active, the CLOCK chip turns green and <code>clock.csv</code> realtime becomes GNSS time.</p>
+<div class="pager"><a href="index.html"><small>Previous</small>Overview</a><a class="next" href="how-it-works.html"><small>Next</small>How it works</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

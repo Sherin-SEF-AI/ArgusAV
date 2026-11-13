@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Desktop launcher for the Argus GUI (avrig gui). Started from an icon there is no terminal,
+# so a failure to start (cameras busy, another instance running, config error) is shown
+# in a dialog instead of being lost.
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+"$ROOT/bin/avrig" gui "$@" 2> >(tee "$err" >&2)
+rc=$?
+if [ $rc -ne 0 ] && command -v zenity >/dev/null; then
+    msg="$(sed -e 's/\x1b\[[0-9;]*m//g' "$err" | grep -v -E '^(INFO|DEBUG) ' | tail -n 12)"
+    zenity --error --title="Argus" --width=520 --no-markup \
+        --text="Argus could not start (exit code $rc).
+
+${msg:-see ~/.local/state/avrig/ for the log}" 2>/dev/null
+fi
+exit $rc

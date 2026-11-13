@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator features - Argus</title>
+<meta name="description" content="The operator application, live guards, markers, the phone page, QA, offload, replay and export.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="img/argus.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="top-inner">
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html" aria-current="page">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
+<a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
+</div></header>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#the-operator-window">The operator window</a><a href="#live-guards">Live guards</a><a href="#phone-page-and-remote-status">Phone page and remote status</a><a href="#quality-assurance">Quality assurance</a><a href="#offload-prune-and-the-depot">Offload, prune and the depot</a><a href="#replay-and-export">Replay and export</a><a href="#gnss-ground-truth-and-can">GNSS ground truth and CAN</a><a href="#hands-free-collection">Hands-free collection</a><a href="#collection-mode">Collection mode</a></aside><article class="content"><div class="kicker">Operator features</div>
+<h1>Recording, guarding, checking</h1>
+<p class="lead">Everything a data-collection crew uses on the road and at the depot: the operator window, live guards, markers, the phone page, verification and reports, offload, replay and export.</p>
+
+<h2 id="the-operator-window">The operator window</h2>
+<figure class="shot"><img src="img/main.png" alt="Argus operator window with six camera previews, the chip bar and recording controls" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Operator window: six live previews, the chip bar, recording controls, markers, and the per-camera sync table. People in the camera images are pixelated for publication.</figcaption></figure>
+<p>The chip bar turns the health model into one glance. Each chip is green, amber or red; clicking ISSUES opens the list of health rules behind them.</p>
+<div class="table"><table>
+<tr><th>Chip</th><th>Shows</th></tr>
+<tr><td>SYNC</td><td>Frame-sync verdict and live spread (LOCKED / DEGRADED / PARTIAL / FREE-RUN)</td></tr>
+<tr><td>CAMS</td><td>Cameras running, frame rate, drops and restarts</td></tr>
+<tr><td>QUALITY</td><td>Image-quality flags: black, dark, over-exposed, blocked lens, blur</td></tr>
+<tr><td>IMU / GNSS</td><td>IMU rate and packet loss; GNSS fix, satellites, RTK state</td></tr>
+<tr><td>CLOCK</td><td>Whether system time comes from GNSS or the network</td></tr>
+<tr><td>REC / DISK</td><td>Recording state and duration; free space and time left</td></tr>
+<tr><td>ISSUES</td><td>Count of WARN / FAIL rules, with the list</td></tr>
+<tr><td>MOUNT / RF / FOX</td><td>Camera-mount guard, GNSS interference guard, Foxglove viewers</td></tr>
+</table></div>
+
+<h3>Operator workflow</h3>
+<ol>
+  <li><strong>Before the drive</strong>: open the GUI (or run <code>avrig check</code>). Any FAIL — sync off, a camera missing, low disk, overheating — blocks recording. Recording past it needs an explicit force, and the session is marked as forced.</li>
+  <li><strong>Metadata</strong>: <em>Info…</em> sets operator, vehicle, route, weather, light, road, tags and notes. Operator and vehicle are required. Pick lists come from <code>~/.config/avrig/presets.yaml</code>; the values go to <code>meta.json</code> and the manifest.</li>
+  <li><strong>While recording</strong>: markers on <kbd>1</kbd>–<kbd>9</kbd> / <kbd>F1</kbd>–<kbd>F9</kbd> or the buttons. On the CLI: Enter for the first label, a digit for a label, or type text for a note. Markers go to <code>markers.csv</code> at the exact capture-clock time.</li>
+  <li><strong>After the drive</strong>: <em>Sessions</em> to verify, open the report, replay, export, offload and prune. These jobs run at low priority and are refused while recording.</li>
+</ol>
+
+<h2 id="live-guards">Live guards</h2>
+<h3>Camera-mount guard</h3>
+<p>A camera that has been knocked by a degree makes its calibration wrong, and nothing else in the data shows it. The mount guard measures, while driving, two directions that belong to the vehicle as seen by each camera:</p>
+<ul>
+  <li><strong>Up</strong> — the axis the camera rotates about when the vehicle turns, from the image motion between two frames 0.25 s apart, cross-checked against the IMU's gyro;</li>
+  <li><strong>Forward</strong> — the direction the camera sees itself moving on straight road.</li>
+</ul>
+<p>Together they fix the camera's orientation in the vehicle. The first drive with enough evidence (40 turning pairs and 30 straight pairs) learns a reference per camera; later drives are compared with it. Each direction is a weighted robust mean (weights grow with the rotation angle, since small turns carry little information about the axis). A change is reported only when it exceeds <code>mount_guard_deg</code> (1°) by more than two standard errors, three evaluations in a row — then the MOUNT chip turns amber, a WARN is raised and an automatic <code>camera_moved</code> marker is written.</p>
+<p>Cost control: frames come from a leaky 640×512 grey branch at 4 Hz; a pair is analysed only while turning, or every few seconds on straight road at a known GNSS speed; parked, frames are not even copied. Measured: <strong>+7–8 % of one core, 0 drops</strong>. The guard uses the active calibration's lens model, or a nominal one (wide: equidistant ~120°, narrow: pinhole ~60°) — the nominal model's bias is the same for the reference and the check, so the change is still measured correctly.</p>
+<pre><code>avrig mount status               <span class="c"># learned references and the last result per camera</span>
+avrig mount reset --cams front_wide --yes   <span class="c"># forget one after a deliberate re-mount</span>
+avrig mount check SESSION        <span class="c"># run the guard over a recorded drive (~25 s per minute of six cameras)</span></code></pre>
+
+<h3>GNSS interference guard</h3>
+<p>Turn the receiver's reports on once with <code>avrig gnss --rf-enable</code> (RAM layer; <code>--persist</code> keeps them). Then, at 1 Hz and under 100 bytes/s: the jamming indicator (0–255), antenna status (open / short) and AGC from UBX-MON-RF, and the spoofing state from NAV-STATUS go to the RF chip, health WARNs and <code>gnss_rf.csv</code>.</p>
+<div class="note"><p>On this receiver (NEO-F9P, firmware HPGL1L5 1.40) the interference detector configuration (CFG-ITFM) and SEC-SIG are not available, so the jamming <em>state</em> reads “unknown”. The indicator, antenna and spoofing state work — indoors on the bench the indicator read 94/255 with the antenna OK.</p></div>
+
+<h3>Automatic events</h3>
+<p>Detected live from IMU and GNSS samples (a cheap append on the sensor threads, analysis at 2 Hz) and written to <code>markers.csv</code> with source <code>auto</code> at the event's own time: hard brake / acceleration (GNSS speed change), sharp turn (yaw rate), bump or pothole (vertical shock), stop / start, GNSS lost / regained, RTK fixed / lost. No IMU mounting calibration is needed: “up” is the long-term mean of the accelerometer. <code>avrig events SESSION --write</code> re-scans old sessions with new thresholds.</p>
+
+<h3>Image quality</h3>
+<p>One 160×128 grey thumbnail per camera per second (well under 1 ms of numpy) flags black, dark, over-exposed, blocked (a large featureless area: a lens cover, a sticker, mud) and blurred images. Blur is judged against the camera's own recent sharpness, because absolute sharpness depends more on the scene than on the lens. A flag must persist for 3 samples, so a passing truck or a tunnel entrance does not raise it.</p>
+
+<h3>Calibration link</h3>
+<p><code>avrig calib register FILE --name N --activate</code> stores an immutable, hashed copy of a calibration, and every session records the active id. Health warns when there is none, when it is older than <code>calib_max_age_days</code>, or when the last check found a moved camera. <code>calib reference</code> (in the calibration bay, right after calibrating) and <code>calib check</code> (same bay, later) compare ORB features to detect a camera that moved — a real-scene test read 0.0 px on all six unchanged views and 5.98 px for a simulated 6 px bump.</p>
+
+<h2 id="phone-page-and-remote-status">Phone page and remote status</h2>
+<figure class="shot narrow"><img src="img/phone.png" alt="Argus status page on a phone" loading="lazy" onerror="this.parentNode.remove()"><figcaption>The phone page: health, sync, recording, guards and camera thumbnails. People in the camera images are pixelated for publication.</figcaption></figure>
+<p><code>avrig gui --remote</code> (or <code>remote_enable: true</code>) serves a status page on the LAN: <code>/</code>, <code>/api/status</code>, <code>/api/health</code> and <code>/thumb/&lt;cam&gt;.jpg</code>. Thumbnails and status are at most one per second. With <code>remote_token</code>, requests need <code>?token=</code> or the <code>X-Avrig-Token</code> header. With <code>remote_markers: true</code> <em>and</em> a token, the page shows big marker buttons for a co-driver (configured labels only). There are no other write endpoints: nothing remote can start, stop or reconfigure the rig.</p>
+
+<h2 id="quality-assurance">Quality assurance</h2>
+<h3>Verify</h3>
+<p><code>avrig verify SESSION</code> checks what downstream consumers rely on: every segment demuxes; video frame counts equal <code>frames.csv</code> rows; timestamps strictly increase; drops; whole-session camera alignment; IMU continuity; GNSS fix and master-clock coverage; image quality; markers. Writes <code>verify.json</code>. On this rig a 61 s recording verified with frames.csv equal to the video frames on all six cameras, 0 drops, and alignment 29 µs median / 38 µs p95.</p>
+<h3>Report</h3>
+<figure class="shot"><img src="img/report.png" alt="Session HTML report" loading="lazy" onerror="this.parentNode.remove()"><figcaption>The self-contained session report: issues, cameras, sync, host load and temperatures, quality timeline, markers.</figcaption></figure>
+<p><code>avrig report SESSION</code> writes one self-contained <code>report.html</code>: sync and offsets over time, host load, temperatures, the quality timeline, route and markers.</p>
+<h3>Sessions</h3>
+<figure class="shot"><img src="img/sessions.png" alt="Sessions window listing recordings" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Sessions: duration, size, status, verify result, offload state and markers, with the after-the-drive actions.</figcaption></figure>
+<h3>Rig health trends</h3>
+<figure class="shot"><img src="img/lab-health.png" alt="Lab Rig health tab with trends and guard states" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Rig health: trends across sessions and the state of the mount and RF guards.</figcaption></figure>
+<p><code>avrig trends</code> summarises every session and flags wear: a camera restarting or dropping in 2 of the last 5 sessions, an offset or the inter-camera spread creeping up, time not LOCKED, temperatures rising, IMU packet loss. Lab → Rig health shows it with the guard states.</p>
+
+<h2 id="offload-prune-and-the-depot">Offload, prune and the depot</h2>
+<ul>
+  <li><code>avrig offload SESSION… --dest DIR</code> computes SHA-256 while copying, re-hashes the copy on read-back, and writes a receipt on both sides. Resumable.</li>
+  <li><code>avrig prune --older-than DAYS</code> deletes only sessions with a verified offload whose copy still exists and re-hashes correctly — including after same-size corruption. Dry run unless <code>--yes</code>.</li>
+  <li><code>avrig depot</code> (or the 15-minute timer) does both automatically when the destination is reachable and nothing records; anything that fails is left for the next run, never half-deleted.</li>
+  <li><code>avrig retain SESSION --pre 20 --post 10</code> keeps only the video around events (hard links, no extra space) with all sensor logs, verifies, and only then (<code>--replace --yes</code>) deletes the original.</li>
+</ul>
+
+<h2 id="replay-and-export">Replay and export</h2>
+<ul>
+  <li><strong>Replay</strong> (Sessions → Replay): up to six hardware decoders at preview size, driven by one clock; each view shows the last frame captured at or before the shared time. On a real session: seek ~0.5 s, all six views within ±30 µs of each other, 1× playback keeps up.</li>
+  <li><strong>MCAP</strong> (<code>avrig export mcap</code>): indexed MCAP with chunk and message indexes and CRCs, ROS 2 CDR encoding — <code>foxglove_msgs/CompressedVideo</code> (H.265 copied verbatim, never re-encoded), <code>sensor_msgs/Imu</code>, <code>sensor_msgs/NavSatFix</code>, markers as logs, session metadata; with a trajectory and calibration also <code>/tf</code>, <code>/tf_static</code> and camera calibration; with detections, box annotations over the video. A 5.6 min session exported in 27 s (5.03 GB for 5.02 GB of video) and seeks from its index in ~0.02 s.</li>
+  <li><strong>Frames</strong> (<code>avrig export frames</code>): timestamp-matched frame sets from all cameras at markers, every N seconds or at given times, with an index of capture times and offsets.</li>
+</ul>
+
+<h2 id="gnss-ground-truth-and-can">GNSS ground truth and CAN</h2>
+<ul>
+  <li><strong>Raw GNSS log</strong> (<code>gnss_raw: true</code> + <code>avrig gnss --raw-enable</code>): carrier phase and pseudoranges (RXM-RAWX) and navigation data (RXM-SFRBX) in <code>gnss_raw.ubx</code>, ~2–5 KB/s, for PPK with a base station in RTKLIB or similar.</li>
+  <li><strong>Live RTK</strong> (<code>ntrip_url</code>): RTCM 3 from an NTRIP caster, CRC-checked, written to the receiver through gpsd; GGA sent back for VRS mount points. Corrections improve position, not timing.</li>
+  <li><strong>CAN</strong> (<code>can_ifaces</code>): raw frames with kernel timestamps in <code>can.csv</code>, decoded offline with the vehicle's DBC; wheel speed feeds the trajectory filter.</li>
+</ul>
+
+<h2 id="hands-free-collection">Hands-free collection</h2>
+<p><code>avrig auto</code> (or the <code>avrig-auto</code> service) records when GNSS speed stays above 2.5 m/s for 3 s, stops after 5 minutes parked, and starts a new session every hour. Preflight still gates every start and is retried. Cameras are off while parked. The phone page is the UI, and an optional GPIO LED shows waiting / recording / fault. SIGTERM (shutdown, UPS low) stops a recording cleanly. Several rigs can be watched on one page with <code>avrig fleet --rigs car1=URL,car2=URL</code>.</p>
+
+<h2 id="collection-mode">Collection mode</h2>
+<p>With the root helper installed and <code>collection_mode: true</code>, a recording saves the clocks and runs <code>jetson_clocks</code>, pauses the Docker containers and stops the services listed in <code>/etc/avrig/collection-mode.conf</code>, and restores exactly what it changed when the recording stops. Nothing is listed by default — during the measurements one monitoring container alone used ~125 % of one core.</p>
+<div class="pager"><a href="how-it-works.html"><small>Previous</small>How it works</a><a class="next" href="lab.html"><small>Next</small>AV lab</a></div></article></div></main>
+<footer><div class="inner">
+<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
+</div></footer>
+</body>
+</html>

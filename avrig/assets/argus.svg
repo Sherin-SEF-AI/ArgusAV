@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Argus: an eye whose iris holds six lenses (the six synced cameras) -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d3352"/>
+      <stop offset="1" stop-color="#0b1626"/>
+    </linearGradient>
+    <radialGradient id="iris" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.45" stop-color="#46dcc9"/>
+      <stop offset="1" stop-color="#178a80"/>
+    </radialGradient>
+    <clipPath id="eye">
+      <path d="M22 128 C 62 56, 194 56, 234 128 C 194 200, 62 200, 22 128 Z"/>
+    </clipPath>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <path d="M22 128 C 62 56, 194 56, 234 128 C 194 200, 62 200, 22 128 Z" fill="#eef4fb"/>
+  <g clip-path="url(#eye)">
+    <circle cx="128" cy="128" r="50" fill="url(#iris)"/>
+    <g fill="#0b1626">
+      <circle cx="162" cy="128" r="6.5"/>
+      <circle cx="145" cy="157.4" r="6.5"/>
+      <circle cx="111" cy="157.4" r="6.5"/>
+      <circle cx="94" cy="128" r="6.5"/>
+      <circle cx="111" cy="98.6" r="6.5"/>
+      <circle cx="145" cy="98.6" r="6.5"/>
+    </g>
+    <circle cx="128" cy="128" r="17" fill="#0b1626"/>
+    <circle cx="120" cy="119" r="5.5" fill="#ffffff" opacity="0.9"/>
+  </g>
+</svg>
