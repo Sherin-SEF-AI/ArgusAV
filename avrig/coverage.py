@@ -56,7 +56,7 @@ def build(path: str, db_path: str = DB) -> str:
               table("Events", st["events"], ["k", "n"]))
     data = json.dumps(dict(tracks=trs, colors=COLORS))
     html = f"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Argus coverage</title>
+<title>Argus Labs coverage</title>
 <link rel=stylesheet href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>body{{font:14px system-ui;margin:0;background:#fff;color:#222}}header{{padding:10px 16px}}
 #map{{height:62vh;background:#eee}}.ts{{display:flex;flex-wrap:wrap;gap:16px;padding:8px 16px}}

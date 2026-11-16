@@ -130,13 +130,44 @@ def set_recording(session_dir: str | None):
 
 
 def active_recording() -> dict | None:
+    """The live capture that offline work must not compete with: an avrig recording
+    (flag file), or rigcap with the cameras open (rigcap advertises nothing, so its
+    process is looked up; it is never modified or signalled)."""
     try:
         with open(RECORDING_FLAG) as f:
             rec = json.load(f)
         os.kill(int(rec["pid"]), 0)          # stale flag from a crashed process?
         return rec
     except (OSError, ValueError, KeyError):
-        return None
+        pass
+    return rigcap_capture()
+
+
+_RIGCAP = [-1e9, None]                       # (checked at, result): offline loops poll per frame
+RIGCAP_CHECK_S = 2.0
+
+
+def rigcap_capture() -> dict | None:
+    """A rigcap process holding a camera open (recording or streaming), or None. Cached
+    for RIGCAP_CHECK_S; one scan of /proc takes ~10 ms."""
+    now = time.monotonic()
+    if now - _RIGCAP[0] >= RIGCAP_CHECK_S:
+        _RIGCAP[:] = [now, scan_rigcap()]
+    return _RIGCAP[1]
+
+
+def scan_rigcap(proc: str = "/proc") -> dict | None:
+    for pid in filter(str.isdigit, os.listdir(proc)):
+        try:
+            with open(f"{proc}/{pid}/cmdline", "rb") as f:
+                if b"rigcap" not in f.read():
+                    continue
+            for fd in os.listdir(f"{proc}/{pid}/fd"):
+                if os.readlink(f"{proc}/{pid}/fd/{fd}").startswith("/dev/video"):
+                    return dict(pid=int(pid), dir="rigcap (cameras open)", source="rigcap")
+        except OSError:
+            continue
+    return None
 
 
 def be_gentle():

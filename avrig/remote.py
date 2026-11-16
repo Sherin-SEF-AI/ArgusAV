@@ -27,7 +27,7 @@ from .health import evaluate, worst
 
 log = logging.getLogger("avrig")
 
-PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Argus</title><!--icon-->
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Argus Labs</title><!--icon-->
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font:15px system-ui;background:#111;color:#ddd;margin:10px}
 .g{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px}
@@ -36,7 +36,7 @@ img{width:100%;background:#000}.c{background:#1b1e22;padding:4px;border-radius:4
 #m{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:10px 0}
 #m button{font-size:18px;padding:18px 6px;border:0;border-radius:8px;background:#2a5d9f;color:#fff}
 #m button:active{background:#16a34a}#r{min-height:1.2em}</style></head>
-<body><h3>Argus <span id=h></span></h3><div id=a></div><div id=m></div><div id=r></div>
+<body><h3>Argus Labs <span id=h></span></h3><div id=a></div><div id=m></div><div id=r></div>
 <div id=s></div><div class=g id=g></div>
 <script>
 const q=location.search;const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -73,7 +73,8 @@ def compact(rig) -> dict:
         f"   clock {ch['master'] if ch else '?'}" + (f"   disk {free:.0f} GB" if free is not None else ""),
         (f"recording {os.path.basename(rec['dir'])} ({rec['elapsed'] / 60:.1f} min, {rec['markers']} markers)"
          if rec else "not recording"),
-    ] + ([_guards(snap)] if _guards(snap) else []) + [f"{i.level} [{i.component}] {i.msg}" for i in issues]
+    ] + ([_guards(snap)] if _guards(snap) else []) + ([_can(snap)] if snap.get("can") else []) \
+      + [f"{i.level} [{i.component}] {i.msg}" for i in issues]
     return dict(t=time.time(), health=worst(issues), summary=summary,
                 cameras=[c["id"] for c in snap["cams"]], recording=rec,
                 sync=dict(verdict=snap["sync"]["verdict"], spread=sp),
@@ -82,8 +83,20 @@ def compact(rig) -> dict:
                 disk_free_gb=free, auto=getattr(rig, "auto_state", None),
                 mount={c: v.get("status") for c, v in ((snap.get("mount") or {}).get("cams") or {}).items()},
                 gnss_rf=snap.get("gnss_rf"),
+                can={k: dict(state=v.get("state"), frames=v.get("frames"), silent_s=v.get("silent_s"))
+                     for k, v in (snap.get("can") or {}).items()} or None,
                 markers=list(rig.cfg.marker_labels) if markers_enabled(rig) else None,
                 issues=[i.as_dict() for i in issues])
+
+
+def _can(snap) -> str:
+    """'can canalyst0 up 51234 frames, last 0.0 s ago' (one entry per interface)."""
+    parts = []
+    for name, st in snap["can"].items():
+        sil = st.get("silent_s")
+        parts.append(f"{name} {st.get('state')} {st.get('frames', 0)} frames"
+                     + (f", last {sil:.1f} s ago" if sil is not None else ", none yet"))
+    return "can " + "; ".join(parts)
 
 
 def _guards(snap) -> str:

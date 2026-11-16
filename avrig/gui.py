@@ -12,9 +12,9 @@ import time
 from collections import deque
 
 import numpy as np
-from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QPointF, QRectF, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPen, QPolygonF, QShortcut
-from PyQt6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+from PyQt6.QtWidgets import (QApplication, QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
                              QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                              QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem,
                              QTabWidget, QVBoxLayout, QWidget)
@@ -23,6 +23,7 @@ from . import APP_NAME, ICON, __version__
 from .errors import PreflightError, RigError
 from . import calib
 from .gui_data import MetaDialog, SessionsWindow, WizardDialog, load_last_meta
+from .gui_drive import Checklist, DriveBoard
 from .health import evaluate, worst
 from .quality import FLAG_TEXT
 from .rig import Rig
@@ -327,6 +328,10 @@ class Main(QMainWindow):
         self.meta = load_last_meta()
         self.sessions_win: SessionsWindow | None = None
         self.busy = False
+        self.settings = QSettings("Argus", "argus")
+        self.last_snap = None
+        self.drive_on = False
+        self.checklist: Checklist | None = None
         self.spread_hist: deque = deque(maxlen=240)
         self._abort_seen = None
         self.setWindowTitle(f"{APP_NAME} {__version__}{'  [SIM]' if rig.cfg.sim else ''}")
@@ -368,10 +373,15 @@ class Main(QMainWindow):
         self.tabs.setFixedWidth(344)
         self.tabs.addTab(self._tab_sync(), "Sync")
         self.tabs.addTab(self._tab_imu(), "IMU")
-        self.tabs.addTab(self._tab_gnss(), "GNSS / Clock")
+        self.tabs.addTab(self._tab_gnss(), "GNSS")
         self.tabs.addTab(self._tab_quality(), "Quality")
         self.tabs.addTab(self._tab_health(), "Health")
+        self.tabs.addTab(self._tab_can(), "CAN")
         mid.addWidget(self.tabs)
+        self.board = DriveBoard()
+        self.board.setFixedWidth(420)
+        self.board.hide()
+        mid.addWidget(self.board)
         v.addLayout(mid, 1)
         self.chips["ISSUES"].mousePressEvent = lambda _: self.tabs.setCurrentIndex(4)
         self.chips["QUALITY"].mousePressEvent = lambda _: self.tabs.setCurrentIndex(3)
@@ -395,6 +405,10 @@ class Main(QMainWindow):
         self.b_lab = QPushButton("Lab")
         self.b_lab.setToolTip("search, coverage, trends, calibration studio, trajectory, tagging, "
                               "privacy blurring, datasets")
+        self.b_drive = QPushButton("Drive view")
+        self.b_drive.setToolTip("big, glanceable status for use while driving (F11)")
+        self.b_check_list = QPushButton("Checklist")
+        self.b_check_list.setToolTip("pre-drive readiness: cameras, sync, IMU, GNSS, disk, CAN, session info")
         self.lab_win = None
         self.session = QLabel("")
         self.session.setObjectName("k")
@@ -414,6 +428,8 @@ class Main(QMainWindow):
             for key in (f"F{k}", str(k)):
                 QShortcut(QKeySequence(key), self, activated=lambda x=lab: self.mark(x))
         ctl.addWidget(self.session, 1)
+        ctl.addWidget(self.b_check_list)
+        ctl.addWidget(self.b_drive)
         ctl.addWidget(self.b_sessions)
         ctl.addWidget(self.b_lab)
         v.addLayout(ctl)
@@ -429,6 +445,11 @@ class Main(QMainWindow):
         self.b_meta.clicked.connect(self.edit_meta)
         self.b_sessions.clicked.connect(self.open_sessions)
         self.b_lab.clicked.connect(self.open_lab)
+        self.b_drive.clicked.connect(self.toggle_drive)
+        self.b_check_list.clicked.connect(self.open_checklist)
+        QShortcut(QKeySequence("F11"), self, activated=self.toggle_drive)
+        if self.settings.value("checklist_at_start", True, type=bool):
+            QTimer.singleShot(4000, self.open_checklist)     # after the cameras had time to start
         bridge.log.connect(self.log_line)
         bridge.done.connect(self.finished)
 
@@ -563,6 +584,221 @@ class Main(QMainWindow):
         w.setLayout(v)
         return w
 
+    def _tab_can(self):
+        w, v = QWidget(), QVBoxLayout()
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(4)
+        box, self.can_kv = kv_grid(["adapter", "port", "bitrate / mode", "frames", "last frame", "message ids",
+                                    "unparsed bytes"])
+        v.addWidget(box)
+        t = self.can_table = QTableWidget(0, 4)
+        t.setHorizontalHeaderLabels(["id", "Hz", "data", "chg"])
+        t.verticalHeader().hide()
+        t.verticalHeader().setDefaultSectionSize(18)
+        hh = t.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        t.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        t.setToolTip("chg = bytes that changed in the last ~5 s: counters and signals (speed, steering...) "
+                     "live there")
+        mono = QFont("DejaVu Sans Mono")
+        mono.setPointSize(8)
+        t.setFont(mono)
+        v.addWidget(t, 1)
+        row = QHBoxLayout()
+        from .usbcan import SPEEDS
+        self.can_rate = QComboBox()
+        for br in sorted(SPEEDS, reverse=True):
+            self.can_rate.addItem(f"{br // 1000} kbit/s", br)
+        self.can_rate.setCurrentIndex(max(0, self.can_rate.findData(self.rig.cfg.can_bitrate)))
+        self.can_rate.setToolTip("CAN bitrate of the vehicle bus (OBD-II: usually 500 kbit/s)")
+        self.b_can_use = QPushButton("Use adapter")
+        self.b_can_use.setToolTip("start logging the USB CAN adapter now (CANalyst-II or USB-CAN-A; "
+                                  "listen-only)")
+        self.b_can_apply = QPushButton("Apply")
+        self.b_can_apply.setToolTip("switch the adapter to the selected bitrate")
+        row.addWidget(self.can_rate, 1)
+        row.addWidget(self.b_can_use)
+        row.addWidget(self.b_can_apply)
+        v.addLayout(row)
+        row2 = QHBoxLayout()
+        self.b_can_scan = QPushButton("Find bitrate")
+        self.b_can_scan.setToolTip("listen at each bitrate for 2 s (ignition ON); never transmits")
+        self.b_can_test = QPushButton("Self-test")
+        self.b_can_test.setToolTip("USB-CAN-A: loopback inside the adapter. CANalyst-II: desk test with "
+                                   "CAN1 wired to CAN2 (transmits - never on a vehicle)")
+        self.b_can_save = QPushButton("Save")
+        self.b_can_save.setToolTip("make it permanent: can_usb and can_bitrate in the config file")
+        for b in (self.b_can_scan, self.b_can_test, self.b_can_save):
+            row2.addWidget(b)
+        v.addLayout(row2)
+        self.b_can_use.clicked.connect(self.can_use)
+        self.b_can_apply.clicked.connect(lambda: self.bg("CAN bitrate", lambda: self._can_set(self.can_rate.currentData())))
+        self.b_can_scan.clicked.connect(lambda: self.bg("CAN bitrate scan", self._can_scan))
+        self.b_can_test.clicked.connect(self.can_selftest)
+        self.b_can_save.clicked.connect(self.can_save)
+        self.can_note = QLabel("Listen-only: the adapter never transmits or acknowledges on the vehicle bus. "
+                               "OBD-II: CAN-H pin 6, CAN-L pin 14, ground pin 4/5; termination OFF.")
+        self.can_note.setObjectName("k")
+        self.can_note.setWordWrap(True)
+        v.addWidget(self.can_note)
+        self._can_prev: dict = {}
+        w.setLayout(v)
+        return w
+
+    def _usbcan(self):
+        """The USB adapter logger (USB-CAN-A or CANalyst-II), None for SocketCAN / off."""
+        return self.rig.can if hasattr(self.rig.can, "set_bitrate") else None
+
+    def can_use(self):
+        try:
+            self.rig.enable_usbcan(self.can_rate.currentData())
+        except RigError as e:
+            QMessageBox.warning(self, APP_NAME, e.msg)
+
+    def can_save(self):
+        from .cli_tools import update_config
+        lg = self._usbcan()
+        br = lg.bitrate if lg else self.can_rate.currentData()
+        p = update_config(self.config_path, can_usb=self.rig.cfg.can_usb or "auto", can_bitrate=br)
+        self.statusBar().showMessage(f"CAN saved to {p}: can_usb {self.rig.cfg.can_usb or 'auto'}, "
+                                     f"can_bitrate {br}", 10000)
+
+    def _can_set(self, br: int):
+        lg = self._usbcan()
+        if lg is None:
+            raise RigError("no USB-CAN-A adapter in use", "press 'Use adapter' first")
+        if self.rig.session is not None:
+            raise RigError("cannot change the CAN bitrate while recording")
+        lg.set_bitrate(br)
+        self.rig.cfg.can_bitrate = br
+        return f"adapter now at {br // 1000} kbit/s (Save makes it permanent)"
+
+    def can_selftest(self):
+        lg = self._usbcan()
+        if getattr(lg, "kind", "") == "canalyst":
+            q = QMessageBox.question(
+                self, APP_NAME, "CANalyst-II bench test\n\nThis test TRANSMITS. Run it only on the desk:\n"
+                "  - adapter NOT connected to a vehicle\n  - CAN1 H to CAN2 H, CAN1 L to CAN2 L\n"
+                "  - 120 ohm termination ON for both channels\n\nIt proves listen-only mode works before "
+                "the adapter goes on a vehicle bus. Run it now?")
+            if q != QMessageBox.StandardButton.Yes:
+                return
+        self.bg("CAN self-test", self._can_selftest)
+
+    def _can_selftest(self):
+        lg = self._usbcan()
+        if lg is None:
+            raise RigError("no USB-CAN-A adapter in use", "press 'Use adapter' first")
+        if self.rig.session is not None:
+            raise RigError("no self-test while recording")
+        ok, lines = lg.run_selftest()
+        return "\n".join(lines)
+
+    def _can_scan(self):
+        lg = self._usbcan()
+        if lg is None:
+            raise RigError("no USB-CAN-A adapter in use", "press 'Use adapter' first")
+        if self.rig.session is not None:
+            raise RigError("no bitrate scan while recording")
+        if getattr(lg, "kind", "") == "canalyst":
+            from .canalyst import listen_only_proven
+            if not listen_only_proven():
+                raise RigError("listen-only mode of this CANalyst-II is not proven yet",
+                               "run Self-test (the bench test) first: a wrong bitrate in normal mode "
+                               "puts error frames on the vehicle bus")
+        start, res = lg.bitrate, []
+        for br in (500_000, 250_000, 125_000, 1_000_000, 100_000, 800_000, 200_000, 50_000):
+            lg.set_bitrate(br)
+            time.sleep(0.4)                              # reopened at the new bitrate
+            n0 = lg.stats[lg.NAME]["frames"]
+            time.sleep(2.0)
+            res.append((br, lg.stats[lg.NAME]["frames"] - n0, len(lg.ids.table())))
+        best = max(res, key=lambda r: r[1])
+        lg.set_bitrate(best[0] if best[1] else start)
+        self.rig.cfg.can_bitrate = lg.bitrate
+        lines = [f"{br // 1000:5d} kbit/s: {n:5d} frames, {k:3d} ids" for br, n, k in res]
+        if not best[1]:
+            return "\n".join(lines + ["", "No traffic at any bitrate: ignition off, wiring, or the OBD port is "
+                                          "gatewayed (answers diagnostic requests only)."])
+        return "\n".join(lines + ["", f"-> {best[0] // 1000} kbit/s selected. Save makes it permanent."])
+
+    def _can_refresh(self, snap):
+        can, lg = snap.get("can"), self.rig.can
+        usb = self._usbcan()
+        idle = not self.busy and self.rig.session is None
+        self.b_can_use.setEnabled(idle and lg is None)
+        for b in (self.b_can_apply, self.b_can_scan, self.b_can_test):
+            b.setEnabled(idle and usb is not None)
+        self.b_can_save.setEnabled(usb is not None or lg is None)
+        kv = self.can_kv
+        if not can:
+            kv["adapter"].setText("off (not in the config)")
+            for k in ("port", "bitrate / mode", "frames", "last frame", "message ids", "unparsed bytes"):
+                kv[k].setText("-")
+            return
+        name, st = next(iter(can.items()))
+        state = st.get("state", "?")
+        color = OK if state == "up" and st.get("silent_s") is not None and st["silent_s"] < 5 else WARN
+        kv["adapter"].setText(f"<span style='color:{color}'>{name}: {state}</span>"
+                              + (f"  ({lg.err})" if getattr(lg, "err", None) else ""))
+        kv["adapter"].setWordWrap(True)
+        kv["port"].setText((st.get("port") or "-") if "port" in st else ", ".join(can))
+        kv["bitrate / mode"].setText(f"{st['bitrate'] // 1000} kbit/s / "
+                                     f"{'listen-only' if st.get('mode') == 'silent' else st.get('mode')}"
+                                     if "bitrate" in st else "set by the interface")
+        total = sum(s["frames"] for s in can.values())
+        kv["frames"].setText(f"{total}" + ("  (logging to can.csv)" if self.rig.session is not None else ""))
+        sil = min((s["silent_s"] for s in can.values() if s.get("silent_s") is not None), default=None)
+        kv["last frame"].setText("never" if sil is None else f"{sil:.1f} s ago")
+        kv["unparsed bytes"].setText(str(st.get("bad_bytes", "-")))
+        if self.tabs.currentIndex() != self.tabs.count() - 1:
+            return                                       # the id table only while the tab is shown
+        rows = lg.ids.table() if lg is not None and hasattr(lg, "ids") else []
+        kv["message ids"].setText(str(len(rows)))
+        now, prev = time.monotonic_ns(), self._can_prev
+        t = self.can_table
+        t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            key = (r["iface"], r["id"], r["ext"])
+            p = prev.get(key)
+            hz = (r["count"] - p[0]) / ((now - p[1]) / 1e9) if p and now > p[1] else 0.0
+            prev[key] = (r["count"], now)
+            stale = now - r["last_t"] > 2e9
+            chg = bin(r["changed"] & ((1 << len(r["data"])) - 1)).count("1")
+            vals = (f"{r['id']:x}{'x' if r['ext'] else ''}", f"{hz:.0f}" if not stale else "-",
+                    r["data"].hex(" "), str(chg) if chg else "")
+            for j, val in enumerate(vals):
+                it = t.item(i, j)
+                if it is None:
+                    it = QTableWidgetItem()
+                    t.setItem(i, j, it)
+                it.setText(val)
+                it.setForeground(QColor("#7d8590" if stale else ("#e6edf3" if not chg else OK)))
+
+    # ------------------------------------------------------------ drive view
+    def toggle_drive(self):
+        """Side tabs <-> big status board; bigger REC and marker buttons. Display only."""
+        self.drive_on = not self.drive_on
+        self.tabs.setVisible(not self.drive_on)
+        self.board.setVisible(self.drive_on)
+        big = "font-size:13pt; padding:9px 14px;" if self.drive_on else ""
+        for b in [self.b_rec, *self.b_marks]:
+            b.setStyleSheet(big)
+        for w in (self.b_stream, self.b_on, self.b_off, self.b_reset, self.b_snap, self.label, self.b_meta):
+            w.setVisible(not self.drive_on)          # setup controls out of the way while driving
+        self.b_drive.setText("Normal view" if self.drive_on else "Drive view")
+        if self.drive_on and self.last_snap:
+            self.board.update_from(self.last_snap, self.rig.cfg, len(self.tiles))
+
+    def open_checklist(self):
+        if self.checklist is None:
+            self.checklist = Checklist(self)
+        self.checklist.show()
+        self.checklist.raise_()
+        self.checklist.refresh()
+
     # --------------------------------------------------------------- actions
     def log_line(self, line):
         self.logview.appendPlainText(line)
@@ -601,6 +837,8 @@ class Main(QMainWindow):
             self.statusBar().showMessage(f"recording -> {result}", 15000)
         elif name.startswith("calibration"):
             self.rig._calib = (0.0, None)
+            QMessageBox.information(self, APP_NAME, f"{name}:\n\n{result}")
+        elif name.startswith("CAN"):
             QMessageBox.information(self, APP_NAME, f"{name}:\n\n{result}")
 
     def confirm_force(self, issues):
@@ -756,7 +994,13 @@ class Main(QMainWindow):
 
     def slow(self):
         try:
-            self._refresh(self.rig.snapshot())
+            snap = self.rig.snapshot()
+            snap["_t"] = time.monotonic()
+            self.last_snap = snap
+            self._refresh(snap)
+            self._can_refresh(snap)
+            if self.drive_on:
+                self.board.update_from(snap, self.rig.cfg, len(self.tiles))
         except Exception:  # a display glitch must never take the recorder down
             log.exception("GUI refresh failed")
         if not self.busy:

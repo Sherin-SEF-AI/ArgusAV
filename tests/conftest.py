@@ -17,3 +17,8 @@ def private_state(tmp_path, monkeypatch):
     monkeypatch.setattr(util, "STATE_DIR", d)
     monkeypatch.setattr(util, "AUDIT_FILE", d / "audit.log")
     monkeypatch.setattr(util, "RECORDING_FLAG", d / "recording.json")
+    monkeypatch.setattr(util, "rigcap_capture", lambda: None)   # the operator's rigcap is not the test's
+    from avrig import overview, study                            # caches and studies: never the operator's
+    monkeypatch.setattr(overview, "DATA_DIR", str(d))
+    monkeypatch.setattr(overview, "CACHE", str(d / "overview_cache.json"))
+    monkeypatch.setattr(study, "DATA_DIR", str(d))

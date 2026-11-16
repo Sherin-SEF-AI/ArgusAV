@@ -32,6 +32,44 @@ def operstate(iface: str) -> str:
         return "missing"
 
 
+class IdStats:
+    """Per message id: count, length, last data and which bytes changed in the last ~5 s.
+    One dict update per frame on the logger thread; the GUI reads table() twice a second."""
+
+    WINDOW_NS = 5_000_000_000
+
+    def __init__(self):
+        self._ids: dict = {}
+        self._lock = threading.Lock()
+
+    def update(self, t: int, iface: str, f: dict):
+        k = (iface, f["id"], f["ext"])
+        d = f["data"]
+        with self._lock:
+            e = self._ids.get(k)
+            if e is None:
+                self._ids[k] = [1, t, d, 0, 0, t]       # count, last_t, data, changed, changed (prev window), window start
+                return
+            prev = e[2]
+            if d != prev:
+                n = min(len(d), len(prev))
+                e[3] |= sum(1 << i for i in range(n) if d[i] != prev[i]) | (0xFF << n if len(d) != len(prev) else 0)
+            if t - e[5] > self.WINDOW_NS:
+                e[4], e[3], e[5] = e[3], 0, t
+            e[0] += 1
+            e[1], e[2] = t, d
+
+    def table(self) -> list[dict]:
+        with self._lock:
+            items = [(k, list(e)) for k, e in self._ids.items()]
+        return [dict(iface=k[0], id=k[1], ext=k[2], count=e[0], last_t=e[1], data=e[2], changed=e[3] | e[4])
+                for k, e in sorted(items, key=lambda x: (x[0][0], x[0][1]))]
+
+    def clear(self):
+        with self._lock:
+            self._ids.clear()
+
+
 class CanLogger(threading.Thread):
     def __init__(self, ifaces: list[str]):
         super().__init__(daemon=True, name="can")
@@ -39,6 +77,7 @@ class CanLogger(threading.Thread):
         self.sink = None
         self.stats = {i: dict(frames=0, errors=0, last_rx=0, state=operstate(i)) for i in self.ifaces}
         self.err: str | None = None
+        self.ids = IdStats()
         self._quit = threading.Event()
 
     def stop(self):
@@ -78,6 +117,7 @@ class CanLogger(threading.Thread):
                 st["frames"] += 1
                 st["errors"] += f["err"]
                 st["last_rx"] = t
+                self.ids.update(t, socks[s], f)
                 if self.sink:
                     self.sink(t, kts, socks[s], f)
             for i in self.ifaces:
@@ -89,3 +129,34 @@ class CanLogger(threading.Thread):
         now = time.monotonic_ns()
         return {i: dict(st, silent_s=(now - st["last_rx"]) / 1e9 if st["last_rx"] else None)
                 for i, st in self.stats.items()}
+
+
+# ----------------------------------------------------------------- USB adapters
+CANALYST_RATES = {5000, 10000, 20000, 33330, 40000, 50000, 66660, 80000, 83330, 100000, 125000, 200000,
+                  250000, 400000, 500000, 666000, 800000, 1000000}
+
+
+def usb_bitrates(kind: str) -> set:
+    from .usbcan import SPEEDS
+    if kind == "canalyst":
+        return CANALYST_RATES
+    if kind == "auto":
+        return CANALYST_RATES | set(SPEEDS)
+    return set(SPEEDS)
+
+
+def usb_kind(cfg_value: str) -> str:
+    """'canalyst' or 'waveshare' for a can_usb setting ('auto': whichever is plugged in)."""
+    if cfg_value == "auto":
+        from . import canalyst
+        return "canalyst" if canalyst.present() else "waveshare"
+    return "canalyst" if cfg_value == "canalyst" else "waveshare"
+
+
+def usb_logger(can_usb: str, bitrate: int, listen_only: bool = True, channels: str = "1"):
+    kind = usb_kind(can_usb)
+    if kind == "canalyst":
+        from .canalyst import CanalystLogger
+        return CanalystLogger(bitrate, [int(c) - 1 for c in channels.replace(" ", "").split(",")], listen_only)
+    from .usbcan import UsbCanLogger
+    return UsbCanLogger("auto" if can_usb in ("auto", "waveshare") else can_usb, bitrate, listen_only)

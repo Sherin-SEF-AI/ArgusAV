@@ -22,6 +22,7 @@ from __future__ import annotations
 import csv
 import functools
 import gzip
+import hashlib
 import html
 import json
 import os
@@ -167,7 +168,7 @@ def scene_prompts() -> tuple:
     path = os.path.join(DATA_DIR, "clip_scene_prompts.npz")
     keys = [f"{g}:{k}" for g, d in SCENE.items() for k in d]
     texts = [SCENE[k.split(":")[0]][k.split(":")[1]] for k in keys]
-    sig = str(hash(tuple(texts)))
+    sig = hashlib.sha256("\n".join(texts).encode()).hexdigest()[:16]   # stable across runs (hash() is salted)
     try:
         z = np.load(path)
         if str(z["sig"]) == sig:
@@ -249,6 +250,8 @@ def embed_session(session: str, cams: list | None = None, progress=None) -> dict
     for lab in labels:
         for g in groups:
             summary[g][lab[g][0]] = summary[g].get(lab[g][0], 0) + 1
+    from .provenance import record_lineage
+    record_lineage(session, "embeddings.npy", ["manifest.json"], "embed", dict(model="clip-vit-b32"))
     return dict(frames=len(rows), scene=summary)
 
 

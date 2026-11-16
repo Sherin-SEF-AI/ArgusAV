@@ -40,13 +40,14 @@ def windows(session: str, pre_s: float, post_s: float, labels: set | None = None
 
 
 def retain(session: str, pre_s: float = 20.0, post_s: float = 10.0, labels: set | None = None,
-           replace: bool = False, progress=None) -> dict:
+           replace: bool = False, progress=None, ws: list | None = None) -> dict:
+    """ws: keep exactly these [(t0_ns, t1_ns)] windows (trigger campaigns) instead of events +- pre/post."""
     from .export import Segments, camera_ids, read_rows
     from .storage import refuse_if_recording
     from .verify import verify
     refuse_if_recording("retention")
     session = os.path.abspath(session.rstrip("/"))
-    ws = windows(session, pre_s, post_s, labels)
+    ws = ws if ws is not None else windows(session, pre_s, post_s, labels)
     if not ws:
         raise RigError("no events in this session - nothing would be kept", "nothing done")
     out = session + "_events"

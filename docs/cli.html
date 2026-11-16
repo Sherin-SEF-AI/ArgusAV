@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Command reference - Argus</title>
+<title>Command reference - Argus Labs</title>
 <meta name="description" content="Every avrig command, grouped by task.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html" aria-current="page">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
@@ -79,7 +79,7 @@
 <tr><th>Command</th><th>Purpose</th></tr>
 <tr><td><code>models [--fetch] [--build]</code></td><td>Download (checksums and revisions pinned, ~750 MB) and compile TensorRT engines (~30 min once)</td></tr>
 <tr><td><code>tag SESSION…</code></td><td>Objects at 2 fps: <code>tags.csv</code>, <code>detections.csv</code></td></tr>
-<tr><td><code>anonymize SESSION</code></td><td>Blurred copy (faces, heads, number plates), same frames</td></tr>
+<tr><td><code>anonymize SESSION</code></td><td>Blurred copy (faces, heads, number plates, text on truck / bus bodies, own car with <code>ego_mask_path</code>), same frames</td></tr>
 <tr><td><code>catalog</code> · <code>search QUERY [--export DIR]</code> · <code>coverage</code></td><td>Scenario catalog, search with clip export, coverage map</td></tr>
 <tr><td><code>embed SESSION…</code></td><td>CLIP embeddings and zero-shot scene labels</td></tr>
 <tr><td><code>find "TEXT" | --like S:CAM:NS | --image FILE</code></td><td>Frames by meaning across every embedded session</td></tr>
@@ -90,6 +90,16 @@
 <tr><td><code>maps update|html|changes</code></td><td>Road roughness, potholes, traffic lights / stop signs and their changes</td></tr>
 <tr><td><code>foxglove SESSION [--speed --start --loop]</code></td><td>Live replay into Foxglove over WebSocket</td></tr>
 <tr><td><code>recon SESSION [--hz] [--no-masks]</code></td><td>Nerfstudio dataset for neural reconstruction</td></tr>
+<tr><td><code>edgecases SESSION [--clips-from ANON] [--exclude N,M -o DIR]</code></td><td>Edge-case miner: unusual moments as preview video, key frame and MCAP clip each, with overview and README</td></tr>
+<tr><td><code>handover SESSION [-o COPY]</code></td><td>Share-ready session: plain-language README, camera preview, GNSS flags, checksums</td></tr>
+<tr><td><code>sheet SESSION --at 2:00,4:30 | --busy N</code></td><td>All-camera frame sheets at given times or the busiest moments</td></tr>
+<tr><td><code>egomask SESSION [--mask JSON]</code></td><td>Own-vehicle mask drawn on an average image of each camera</td></tr>
+<tr><td><code>relabel SESSION OUT --map old=new,...</code></td><td>Copy of a session with cameras renamed everywhere</td></tr>
+<tr><td><code>overview [--json]</code></td><td>The library at a glance: sessions, processing state, totals, what to do next</td></tr>
+<tr><td><code>pipeline [SESSION...] [--full] [--steps a,b] [--dry]</code></td><td>Process sessions with the standard steps, skipping what is done</td></tr>
+<tr><td><code>characterize SESSION... [--methods]</code></td><td>Sensor characterization: camera timing, sync spread, IMU Allan deviation, GNSS, clock</td></tr>
+<tr><td><code>split [SESSION...] [--study NAME] --val 0.1 --test 0.1</code></td><td>Train / val / test split by place, without leakage</td></tr>
+<tr><td><code>study new|add|note|show|export NAME</code></td><td>Studies: named sets of sessions with purpose, protocol, notes and a documented export</td></tr>
 </table></div>
 
 <h2 id="root-setup-script">Root setup script</h2>
@@ -112,7 +122,7 @@ bash setup/install-desktop.sh [--remove]      <span class="c"># desktop shortcut
 </dl>
 <div class="pager"><a href="performance.html"><small>Previous</small>Performance</a><a class="next" href="troubleshooting.html"><small>Next</small>Troubleshooting</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

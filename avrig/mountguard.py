@@ -105,6 +105,32 @@ class Lens:
         return cv2.undistortPoints(p, self.K, self.D).reshape(-1, 2)
 
 
+def warm_up() -> float:
+    """Load OpenCV and run each call the guard uses once, on tiny inputs; returns seconds.
+
+    Call it BEFORE the cameras stream. Importing cv2 takes ~0.5 s on the Orin and holds
+    the interpreter lock while it does; done lazily by the guard's first job (the first
+    turn of a drive) it stalled the capture callbacks of all six cameras together and
+    lost ~12 frames each (road sessions 2026-11-14). First calls of findEssentialMat and
+    friends add their own one-off set-up cost."""
+    t0 = time.perf_counter()
+    import cv2
+    rng = np.random.default_rng(0)
+    a = (rng.random((64, 64)) * 255).astype(np.uint8)
+    b = np.roll(a, 1, axis=1)
+    p = cv2.goodFeaturesToTrack(a, 50, 0.01, 4)
+    if p is not None:
+        cv2.calcOpticalFlowPyrLK(a, b, p, None, winSize=(21, 21), maxLevel=3)
+    pts = rng.random((40, 1, 2))
+    cv2.undistortPoints(pts, np.eye(3), None)
+    cv2.fisheye.undistortPoints(pts, np.eye(3), np.zeros(4))
+    na, nb = pts.reshape(-1, 2), pts.reshape(-1, 2) + 0.01
+    E, inl = cv2.findEssentialMat(na, nb, np.eye(3), cv2.RANSAC, 0.999, 0.001)
+    if E is not None and E.shape[0] >= 3:
+        cv2.recoverPose(E[:3], na, nb, np.eye(3), mask=inl)
+    return time.perf_counter() - t0
+
+
 def pair_motion(a: np.ndarray, b: np.ndarray, lens: Lens, n_feat: int = 300):
     """Relative camera motion between two grey frames: (R, motion_dir, inliers) or None.
     R maps points of frame a into frame b (X_b = R X_a + t); motion_dir is the unit

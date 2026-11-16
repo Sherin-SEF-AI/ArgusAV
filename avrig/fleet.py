@@ -15,10 +15,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Argus fleet</title><style>body{font:14px system-ui;margin:12px;background:#111;color:#ddd}
+<title>Argus Labs fleet</title><style>body{font:14px system-ui;margin:12px;background:#111;color:#ddd}
 table{border-collapse:collapse;width:100%}td,th{padding:6px 8px;border-bottom:1px solid #333;text-align:left;vertical-align:top}
 .OK{color:#8ee39e}.WARN{color:#ffd166}.FAIL,.DOWN{color:#ff8a8a}a{color:#9cf}small{color:#999}</style>
-<h3>Argus fleet <small id=t></small></h3><table><thead><tr><th>rig</th><th>health</th><th>recording</th><th>sync</th>
+<h3>Argus Labs fleet <small id=t></small></h3><table><thead><tr><th>rig</th><th>health</th><th>recording</th><th>sync</th>
 <th>status</th><th>issues</th></tr></thead><tbody id=b></tbody></table>
 <script>
 const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

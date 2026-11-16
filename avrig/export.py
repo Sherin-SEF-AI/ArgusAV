@@ -341,6 +341,44 @@ def demux_count(path: str) -> int:
     return n[0]
 
 
+_FRAMES_CACHE: dict = {}
+
+
+def file_frame_times(path: str):
+    """Capture times of the frames of one mkv, in ns relative to its first frame, from the
+    session's frames.csv and segments.csv - or None when they cannot be matched to the
+    file. The video's PTS are these capture times (measured: within 1 ms), so they
+    identify a decoded frame exactly. A fixed 30.000 fps grid does not: the trigger runs
+    at 29.96 fps on some setups, which is 12 frames of drift over a 5-minute file."""
+    try:
+        cam_dir = os.path.dirname(os.path.abspath(path))
+        session, cam = os.path.dirname(cam_dir), os.path.basename(cam_dir)
+        fcsv = os.path.join(cam_dir, "frames.csv")
+        key = (fcsv, os.path.getmtime(fcsv), os.path.getsize(fcsv))
+        hit = _FRAMES_CACHE.get(fcsv)              # (key, mono): one tuple, so threads never see a mix
+        if hit is None or hit[0] != key:
+            with open(fcsv) as f:
+                r = csv.reader(f)
+                col = next(r).index("mono_ns")
+                mono = np.array([int(x[col]) for x in r if len(x) > col and x[col]], dtype=np.int64)
+            if len(_FRAMES_CACHE) > 16:
+                _FRAMES_CACHE.clear()
+            _FRAMES_CACHE[fcsv] = hit = (key, mono)
+        mono = hit[1]
+        rel = f"{cam}/{os.path.basename(path)}"
+        for row in read_rows(os.path.join(session, "segments.csv")):
+            if row.get("file") == rel:
+                i0 = int(np.searchsorted(mono, int(row["start_mono_ns"])))
+                i1 = int(np.searchsorted(mono, int(row["end_mono_ns"]))) if row.get("end_mono_ns") else len(mono)
+                i1 = max(i1, i0 + 1)
+                if i0 >= len(mono) or abs(int(mono[i0]) - int(row["start_mono_ns"])) > 1_000_000 or i1 - i0 < 1:
+                    return None
+                return mono[i0:i1] - mono[i0]
+    except (OSError, ValueError, StopIteration, KeyError):
+        pass
+    return None
+
+
 class Decoder:
     """Hardware-decode one mkv segment to RGBA at (w, h), in order, from any frame.
 
@@ -354,6 +392,10 @@ class Decoder:
         """keyframes=True decodes only the IDR frames (one per second at the rig's GOP),
         dropping the others before the decoder: ~30x less decoding for 1 Hz sampling."""
         self.w, self.h, self.path = w, h, path
+        # Before the pipeline exists: once it plays, nothing slow may come between the first
+        # sample and a seek (the decoder fills the bounded appsink and a flushing seek then
+        # deadlocks - seen as replay hanging when this lookup sat after the first pull).
+        self.rel = file_frame_times(path)          # capture time of each frame, or None (30 fps grid)
         drop = " ! identity drop-buffer-flags=delta-unit" if keyframes else ""
         self.pipe = Gst.parse_launch(
             f'filesrc location="{path}" ! matroskademux ! h265parse{drop} ! nvv4l2decoder ! nvvidconv'
@@ -367,6 +409,23 @@ class Decoder:
         self.p0 = first.get_buffer().pts
         self.period = 1e9 / 30
         self._pending = first
+        self._after_seek = False
+        if self.rel is not None and len(self.rel) > 1:
+            self.period = float(self.rel[-1]) / (len(self.rel) - 1)
+
+    def _index(self, pts: int) -> tuple[int, float]:
+        """(frame index within the file, distance from that frame's time in frame periods)."""
+        d = pts - self.p0
+        if self.rel is None:
+            x = d / self.period
+            return int(round(x)), abs(x - round(x))
+        k = int(np.clip(np.searchsorted(self.rel, d), 0, len(self.rel) - 1))
+        if k and abs(int(self.rel[k - 1]) - d) <= abs(int(self.rel[k]) - d):
+            k -= 1
+        if d > self.rel[-1] + self.period / 2:      # frames beyond frames.csv (unfinished tail)
+            k = len(self.rel) - 1 + int(round((d - int(self.rel[-1])) / self.period))
+            return k, 0.0
+        return k, abs(int(self.rel[k]) - d) / self.period
 
     def seek_frame(self, k: int):
         """Position on frame k of this file (accurate seek; identity from PTS)."""
@@ -374,9 +433,11 @@ class Decoder:
             self._pending = None
             # Matroska seek positions are relative to the FILE's start, while buffer PTS
             # keep the session's running time (verified on fragments 2..n).
+            t = int(self.rel[k]) if self.rel is not None and k < len(self.rel) else k * self.period
             if not self.pipe.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
-                                         int((k - 0.25) * self.period)):
+                                         max(0, int(t - 0.25 * self.period))):
                 raise RigError(f"seek failed in {self.path}")
+            self._after_seek = True
 
     def frames(self, keep=None):
         """Yield (frame index within file, RGBA ndarray) until the end of the file. With
@@ -386,7 +447,14 @@ class Decoder:
             if s is None:
                 return
             b = s.get_buffer()
-            k = int(round((b.pts - self.p0) / self.period))
+            k, off = self._index(b.pts)
+            if self._after_seek:
+                # An accurate seek to a quarter frame before frame k also delivers frame k-1,
+                # clipped to the seek position: its PTS is off every frame time and used to
+                # be taken for frame k (measured: reads after a seek were one frame early).
+                self._after_seek = False             # only the first buffer after a seek can be clipped
+                if off > 0.12:
+                    continue
             if keep is not None and not keep(k):
                 continue
             ok, info = b.map(Gst.MapFlags.READ)
@@ -469,10 +537,23 @@ def target_times(session: str, every_s: float | None = None, markers: bool = Fal
 
 
 # ----------------------------------------------------------------------- MCAP
-def _access_units(path: str):
-    pipe = Gst.parse_launch(
-        f'filesrc location="{path}" ! matroskademux ! h265parse config-interval=-1'
-        f' ! video/x-h265,stream-format=byte-stream,alignment=au ! appsink name=s sync=false')
+H264_BITRATE = 24_000_000   # H.264 needs ~1.2-1.5x the H.265 rate (20 Mbit/s) for similar quality
+
+
+def _access_units(path: str, codec: str = "h265"):
+    """Access units of one segment, in order, with a keyframe flag. codec "h265" passes the
+    recorded stream through untouched; "h264" re-encodes on the hardware (NVDEC -> NVENC)
+    for viewers without H.265 (Foxglove on Linux): one access unit per input frame, no
+    B-frames (decode order = capture order), an IDR with SPS/PPS every 30 frames (1 s)."""
+    if codec == "h264":
+        src = (f'filesrc location="{path}" ! matroskademux ! h265parse ! nvv4l2decoder'
+               f' ! nvv4l2h264enc bitrate={H264_BITRATE} iframeinterval=30 idrinterval=30'
+               f' insert-sps-pps=true num-B-Frames=0 profile=4'
+               f' ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au')
+    else:
+        src = (f'filesrc location="{path}" ! matroskademux ! h265parse config-interval=-1'
+               f' ! video/x-h265,stream-format=byte-stream,alignment=au')
+    pipe = Gst.parse_launch(src + ' ! appsink name=s sync=false')
     sink = pipe.get_by_name("s")
     pipe.set_state(Gst.State.PLAYING)
     try:
@@ -491,11 +572,12 @@ def _access_units(path: str):
         pipe.set_state(Gst.State.NULL)
 
 
-def _video_stream(session: str, cam: str, utc: UtcMap, t0: int | None = None, t1: int | None = None):
+def _video_stream(session: str, cam: str, utc: UtcMap, t0: int | None = None, t1: int | None = None,
+                  codec: str = "h265"):
     """Access units of one camera with their capture time. With a [t0, t1] mono range
     (a clip), decoding needs a keyframe, so the clip starts at the keyframe before t0
     (the encoder puts one every second) and only the files covering the range are read."""
-    meta = {"camera": cam, "codec": "h265", "time": "driver capture time (frames.csv), UTC",
+    meta = {"camera": cam, "codec": codec, "time": "driver capture time (frames.csv), UTC",
             "sync": "hardware frame sync (see manifest.json frame_sync)"}
     if t0 is None:
         rows = read_rows(os.path.join(session, cam, "frames.csv"))
@@ -519,11 +601,11 @@ def _video_stream(session: str, cam: str, utc: UtcMap, t0: int | None = None, t1
     for k, f in enumerate(files):
         if t0 is not None:
             r = first[k]
-        for au, key in _access_units(f):
+        for au, key in _access_units(f, codec):
             if r >= len(mono) or r > r_hi:
                 return
             t = utc(mono[r])
-            msg = (t, f"/camera/{cam}", VIDEO, meta, Cdr().time(t).string(cam).blob(au).string("h265").b)
+            msg = (t, f"/camera/{cam}", VIDEO, meta, Cdr().time(t).string(cam).blob(au).string(codec).b)
             r += 1
             if r - 1 < r_lo:
                 gop = [msg] if key else (gop + [msg] if gop else [])
@@ -708,7 +790,8 @@ def _clip(stream, lo: int | None, hi: int | None):
         yield m
 
 
-def session_messages(session: str, t0: int | None = None, t1: int | None = None, cfg=None):
+def session_messages(session: str, t0: int | None = None, t1: int | None = None, cfg=None,
+                     codec: str = "h265"):
     """(session metadata, iterator of (utc_ns, topic, (schema name, schema), channel meta,
     CDR payload) in time order) - everything the MCAP export writes, also used to replay a
     session live to Foxglove. [t0, t1] is a CLOCK_MONOTONIC range (a clip)."""
@@ -718,7 +801,7 @@ def session_messages(session: str, t0: int | None = None, t1: int | None = None,
     slope = float(((man.get("imu") or {}).get("clock") or {}).get("slope") or 0.0)
     lo = utc(t0) if t0 is not None else None
     hi = utc(t1) if t1 is not None else None
-    streams = [_video_stream(session, c, utc, t0, t1) for c in camera_ids(session)]
+    streams = [_video_stream(session, c, utc, t0, t1, codec) for c in camera_ids(session)]
     streams += [_clip(x, lo, hi) for x in (_imu_stream(session, utc, slope), _gnss_stream(session),
                                            _marker_stream(session, utc), *_pose_streams(session, utc),
                                            *(_annotation_stream(session, utc, c) for c in camera_ids(session)))]
@@ -734,12 +817,14 @@ def session_messages(session: str, t0: int | None = None, t1: int | None = None,
 
 
 def export_mcap(session: str, out: str, progress=None, t0: int | None = None,
-                t1: int | None = None, cfg=None) -> dict:
+                t1: int | None = None, cfg=None, codec: str = "h265") -> dict:
     """The whole session, or a clip [t0, t1] (CLOCK_MONOTONIC ns, as in the session).
     With trajectory.csv: /tf and /trajectory/fix; with detections.csv: image annotations;
     with a calibration (cfg): /tf_static for the cameras and per-camera calibration."""
     refuse_if_recording("MCAP export")
-    meta, messages = session_messages(session, t0, t1, cfg)
+    if codec not in ("h265", "h264"):
+        raise RigError(f"codec {codec!r}: h265 or h264")
+    meta, messages = session_messages(session, t0, t1, cfg, codec)
     w = McapWriter(out + ".tmp")
     counts: dict = {}
     try:
@@ -754,5 +839,12 @@ def export_mcap(session: str, out: str, progress=None, t0: int | None = None,
         w.abort()
         os.unlink(out + ".tmp")
         raise
+    if codec != "h265" and t0 is None and t1 is None:
+        for cam in camera_ids(session):
+            want = len(read_rows(os.path.join(session, cam, "frames.csv")))
+            got = counts.get(f"/camera/{cam}", 0)
+            if got != want:
+                os.unlink(out + ".tmp")
+                raise RigError(f"{cam}: {got} {codec} frames for {want} recorded; nothing written")
     os.replace(out + ".tmp", out)
     return counts

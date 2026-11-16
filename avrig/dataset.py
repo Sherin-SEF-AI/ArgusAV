@@ -130,6 +130,9 @@ def export(session: str, out: str, fmt: str = "nuscenes", hz: float = 2.0, cams:
         shutil.rmtree(tmp, ignore_errors=True)
     res.update(keyframes=len(times), pose=traj is not None, pose_calibrated=bool(cposes),
                calibration=(cal or {}).get("created") if cal else None)
+    from .provenance import record_lineage
+    record_lineage(session, out, ["manifest.json"] + (["labels3d.csv"] if os.path.exists(os.path.join(session, "labels3d.csv"))
+                                                      else []), f"dataset {fmt}", dict(hz=hz))
     return res
 
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Getting started - Argus</title>
+<title>Getting started - Argus Labs</title>
 <meta name="description" content="Hardware, installation, frame sync at boot, the desktop shortcut and the daily commands.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,13 +11,13 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html" aria-current="page">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
 <main><div class="doc"><aside class="toc"><b>On this page</b><a href="#hardware">Hardware</a><a href="#install">Install</a><a href="#frame-sync-at-boot">Frame sync at boot</a><a href="#desktop-shortcut">Desktop shortcut</a><a href="#every-day">Every day</a><a href="#a-first-recording">A first recording</a><a href="#optional-root-setup">Optional root setup</a></aside><article class="content"><div class="kicker">Getting started</div>
 <h1>Install, boot, record</h1>
-<p class="lead">Argus runs on the rig itself. After a one-time setup, a normal day is two commands: <code>avrig check</code> to confirm the rig, and <code>avrig gui</code> (or the desktop icon) to record.</p>
+<p class="lead">Argus Labs runs on the rig itself. After a one-time setup, a normal day is two commands: <code>avrig check</code> to confirm the rig, and <code>avrig gui</code> (or the desktop icon) to record.</p>
 
 <h2 id="hardware">Hardware</h2>
 <div class="table"><table>
@@ -33,7 +33,7 @@
 <pre><code>v4l2-ctl --list-devices        <span class="c"># expect six "vi-output, isx031 &lt;bus&gt;-&lt;addr&gt;" nodes</span></code></pre>
 
 <h2 id="install">Install</h2>
-<p>Argus has no build step and no Python packaging: it runs from the source tree. The dependencies are the ones JetPack and Ubuntu already provide.</p>
+<p>Argus Labs has no build step and no Python packaging: it runs from the source tree. The dependencies are the ones JetPack and Ubuntu already provide.</p>
 <pre><code><span class="c"># system packages (most are already on a JetPack image)</span>
 sudo apt install python3-numpy python3-yaml python3-opencv python3-pyqt6 \
                  python3-gi gir1.2-gstreamer-1.0 gpsd gpsd-clients v4l-utils
@@ -58,7 +58,7 @@ gnss_interference: true       <span class="c"># default; also run `avrig gnss --
 <pre><code>avrig models --fetch --build</code></pre>
 
 <h2 id="frame-sync-at-boot">Frame sync at boot</h2>
-<p>Hardware frame sync is a per-camera driver setting (<code>frame_sync_mode</code>) that resets to 0 at every reboot. A rig that silently comes back unsynced looks perfect in every other way, so Argus installs a boot service that turns it on safely and checks the result:</p>
+<p>Hardware frame sync is a per-camera driver setting (<code>frame_sync_mode</code>) that resets to 0 at every reboot. A rig that silently comes back unsynced looks perfect in every other way, so Argus Labs installs a boot service that turns it on safely and checks the result:</p>
 <pre><code>sudo bash setup/avrig-install.sh --autostart
 sudo reboot
 <span class="c"># after the reboot, once:</span>
@@ -137,7 +137,7 @@ avrig verify ~/avrig-sessions/&lt;session&gt; --report</code></pre>
 <p>The GNSS master clock (chrony disciplined from gpsd's SHM refclock) needs a GNSS fix and is a separate one-time step: <code>sudo bash setup/gnss-clock/install.sh</code> (it also installs udev rules that give the IMU a 1 ms FTDI latency timer); once active, the CLOCK chip turns green and <code>clock.csv</code> realtime becomes GNSS time.</p>
 <div class="pager"><a href="index.html"><small>Previous</small>Overview</a><a class="next" href="how-it-works.html"><small>Next</small>How it works</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

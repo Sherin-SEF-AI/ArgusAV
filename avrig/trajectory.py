@@ -510,6 +510,9 @@ def solve_session(session: str, cfg=None, out: str | None = None, progress=None,
         bias_acc=[round(float(x), 4) for x in r["bias_acc"]], bias_gyr_dps=[round(math.degrees(float(x)), 4) for x in r["bias_gyr"]])
     with open(os.path.join(os.path.dirname(path), "trajectory.json"), "w") as f:
         json.dump(summary, f, indent=1)
+    from .provenance import record_lineage
+    record_lineage(session, path, ["imu.csv", "gnss.csv", "manifest.json"] + (["visual_speed.csv"] if visual else []),
+                   "trajectory", dict(visual=visual))
     return summary
 
 

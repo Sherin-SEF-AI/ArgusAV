@@ -183,7 +183,7 @@ def html(rows: list[dict], finds: list[dict], path: str) -> str:
         return (f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}"><polyline fill="none" '
                 f'stroke="currentColor" stroke-width="1.5" points="{pts}"/></svg> {v[-1]:g}')
 
-    lines = ["<!doctype html><meta charset=utf-8><title>Argus trends</title><style>"
+    lines = ["<!doctype html><meta charset=utf-8><title>Argus Labs trends</title><style>"
              "body{font:14px system-ui;margin:16px;background:#fff;color:#222}"
              "table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #ccc;padding:3px 7px;"
              "text-align:right}th{background:#f3f3f3}.WARN{color:#a60}.OK{color:#080}"

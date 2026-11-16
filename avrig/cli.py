@@ -6,10 +6,12 @@ Exit codes: 0 ok | 1 health/preflight/verify failure | 2 usage or config error |
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import os
 import select
+import re
 import signal
 import sys
 import time
@@ -359,15 +361,29 @@ def calibrate(rig, snap, config_path: str) -> int:
     if not ch or ch["master"] == "none":
         raise RigError("system clock is not disciplined; cannot calibrate", "check chrony")
     lat_ms = (sm["offset_ns"] + ch["offset_us"] * 1e3) / 1e6   # chrony: >0 = clock behind
+    # A latency is a delay: it cannot be negative, and over USB it is well under a second.
+    # A scattered fit means the system clock itself moved during the run (e.g. network
+    # time over a mobile hotspot); saving that would shift every GNSS timestamp.
+    jit_ms = sm["jitter_us"] / 1e3
+    if not 0.0 <= lat_ms <= 500.0 or jit_ms > 20.0:
+        raise RigError(f"implausible GNSS latency {lat_ms:.1f} ms (jitter {jit_ms:.1f} ms, clock ref "
+                       f"{ch['ref']}): the system clock was not steady during the run; nothing saved",
+                       "make GNSS the master clock first (sudo bash setup/gnss-clock/install.sh), "
+                       "then re-run avrig clock --calibrate -t 120")
     path = os.path.expanduser(config_path)
-    data = {}
-    if os.path.exists(path):
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
-    data["gnss_latency_ms"] = round(lat_ms, 3)
+    # Change only the gnss_latency_ms line: re-dumping the whole file would drop the
+    # operator's comments and re-sort the camera map (which sets the tile order).
+    text = open(path).read() if os.path.exists(path) else ""
+    line = f"gnss_latency_ms: {round(lat_ms, 3)}"
+    pat = re.compile(r"^gnss_latency_ms:.*$", re.M)
+    text = pat.sub(line, text, count=1) if pat.search(text) else \
+        text + ("" if text.endswith("\n") or not text else "\n") + line + "\n"
+    if not isinstance(yaml.safe_load(text) or {}, dict):
+        raise RigError(f"{path}: not a YAML mapping; nothing saved")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        yaml.safe_dump(data, f, sort_keys=True)
+    with open(path + ".tmp", "w") as f:
+        f.write(text)
+    os.replace(path + ".tmp", path)
     audit("gnss_latency_calibrated", ms=round(lat_ms, 3))
     print(f"{G}gnss_latency_ms = {lat_ms:.3f}{X}  ({sm['n']} epochs, jitter "
           f"{sm['jitter_us'] / 1e3:.2f} ms, clock ref {ch['ref']}) -> {path}")
@@ -424,6 +440,7 @@ def cmd_gui(args) -> int:
 
 
 # -------------------------------------------------------------------------- main
+OPTIONAL_CLI = ("cli_odd", "cli_mining", "cli_sim", "cli_ops", "cli_edge", "cli_research")
 NEEDS_LOCK = {"status", "check", "sync", "record", "monitor", "clock", "gui", "soak", "calib",
               "wizard", "imu", "auto"}
 
@@ -484,6 +501,11 @@ def parser() -> argparse.ArgumentParser:
     cli_tools.register(sub)
     cli_lab.register(sub)
     cli_v3.register(sub)
+    for name in OPTIONAL_CLI:          # lab tool groups: one failing to import never breaks the rest
+        try:
+            importlib.import_module(f"avrig.{name}").register(sub)
+        except Exception as e:
+            log.debug("optional commands %s unavailable: %s", name, e)
     return ap
 
 

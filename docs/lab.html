@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AV-lab tools - Argus</title>
+<title>AV-lab tools - Argus Labs</title>
 <meta name="description" content="Search by meaning, curation, 3D pre-labels, trajectory and visual speed, map layers, datasets, reconstruction and Foxglove.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,13 +11,13 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html" aria-current="page">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
 <main><div class="doc"><aside class="toc"><b>On this page</b><a href="#search-by-meaning">Search by meaning</a><a href="#scenario-catalog">Scenario catalog</a><a href="#collection-and-curation">Collection and curation</a><a href="#tagging-and-privacy">Tagging and privacy blurring</a><a href="#3d-pre-labels">3D pre-labels</a><a href="#trajectory-and-visual-speed">Trajectory and visual speed</a><a href="#map-layers">Map layers</a><a href="#calibration-studio">Calibration studio</a><a href="#datasets">Datasets</a><a href="#foxglove-live-and-replay">Foxglove live and replay</a><a href="#reconstruction-export">Reconstruction export</a><a href="#led-sync-check">LED sync check</a></aside><article class="content"><div class="kicker">AV-lab tools</div>
 <h1>From drives to data</h1>
-<p class="lead">After the drive, Argus turns recordings into something a perception team can use: searchable by meaning, curated for diversity, pre-labelled in 3D, placed on a smoothed trajectory, mapped across drives, and exported to the formats the tools expect.</p>
+<p class="lead">After the drive, Argus Labs turns recordings into something a perception team can use: searchable by meaning, curated for diversity, pre-labelled in 3D, placed on a smoothed trajectory, mapped across drives, and exported to the formats the tools expect.</p>
 <div class="note"><p>None of this runs during a recording. Every job runs at the lowest CPU and I/O priority, refuses to start while recording, and stops itself if one starts. In the GUI they live in the <strong>Lab</strong> window — Explore, Scenarios, Collection, Labels &amp; maps, Rig health, Calibration and Processing — and every job shows a progress bar, elapsed time and a Stop button.</p></div>
 <figure class="shot"><img src="img/lab-processing.png" alt="Lab window Processing tab with a running job and progress bar" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Lab → Processing: jobs with progress, elapsed time and Stop.</figcaption></figure>
 
@@ -57,6 +57,9 @@ near:LAT,LON,KM  vehicle:X  route:X  weather:X  tag:X  since:2026-11-01
 <ul>
   <li><code>avrig tag SESSION</code> runs YOLOX-s on every camera at 2 fps: <code>tags.csv</code> for the catalog and <code>detections.csv</code> as pre-annotations. 5.6 min × 6 cameras took 118 s — 3× faster than real time.</li>
   <li><code>avrig anonymize SESSION</code> writes a copy (<code>&lt;session&gt;_anon</code>) with faces and number plates blurred: YuNet faces on the frame and inside each person's head region, a plate detector on the frame and on each vehicle, the head of anyone whose face was not found blurred anyway, and the previous frame's boxes blurred too, so a one-frame miss does not leak. Pixelation is irreversible. Every output file has exactly the frames of its source (checked), so replay and export work unchanged. 61 s × 6 cameras (10,876 frames): 494 s with 3 workers. Review blurred data before release — detection is never perfect.</li>
+  <li>Text on truck and bus bodies is blurred too (PP-OCRv4 text detection): registration numbers are often painted on cargo doors, where a plate detector does not look. With <code>ego_mask_path</code> in the config the rig's own car is smoothed out in every frame (its paint and glass reflect other cars' plates); <code>avrig egomask SESSION</code> draws the mask on an average image of each camera to trace or check it.</li>
+  <li><code>avrig edgecases SESSION --clips-from SESSION_anon</code> finds the unusual moments of a drive (very close road users, cut-ins, animals, crowds, hard braking, big bumps, GNSS loss, sudden light changes) and writes each as a six-camera preview video, a full-resolution key frame and an MCAP clip, with an overview image and a README. They are automatic picks: check the overview, then <code>--exclude 3,7</code> removes false alarms.</li>
+  <li><b>Research tools.</b> The Lab opens on <b>Overview</b>: totals, one row per session with what has been done, and what to do next; <b>Process new sessions</b> runs <code>avrig pipeline</code>. <code>avrig.api</code> gives research code arrays, images and hardware-synced frame sets (a map-style dataset usable with PyTorch). <code>avrig characterize</code> measures camera timing, sync spread and the IMU's Allan deviation from the recording and writes a methods paragraph. <code>avrig split</code> makes train / val / test splits by place, so no road is in two splits. <code>avrig study</code> keeps the sessions of one research question with its purpose, protocol and notes, and exports a documented, citable record.</li>
 </ul>
 
 <h2 id="3d-pre-labels">3D pre-labels</h2>
@@ -114,7 +117,7 @@ near:LAT,LON,KM  vehicle:X  route:X  weather:X  tag:X  since:2026-11-01
 </ul>
 
 <h2 id="foxglove-live-and-replay">Foxglove live and replay</h2>
-<p>Argus speaks the Foxglove WebSocket protocol directly, with no extra packages (RFC 6455 on the Python standard library).</p>
+<p>Argus Labs speaks the Foxglove WebSocket protocol directly, with no extra packages (RFC 6455 on the Python standard library).</p>
 <ul>
   <li><strong>Replay</strong> — <code>avrig foxglove SESSION [--speed 2 --start 30 --loop]</code> streams the same messages as the MCAP export (H.265 video, IMU, GNSS, markers, <code>/tf</code>, annotations, calibration) at real time to <code>ws://localhost:8765</code>. No export step, nothing written.</li>
   <li><strong>Live</strong> — <code>foxglove_live: true</code>: while recording, small JPEG previews (~5 fps per camera), IMU at 100 Hz, the GNSS fix and the rig status. Work is done only for subscribed topics. Measured with a viewer on every topic: recorder CPU unchanged (164 %), LOCKED, 0 drops.</li>
@@ -128,7 +131,7 @@ near:LAT,LON,KM  vehicle:X  route:X  weather:X  tag:X  since:2026-11-01
 <p>Timestamps can agree while images do not. <code>avrig ledsync</code> flashes an LED on a 40-pin GPIO for 0.5 ms every 200.7 ms; 200 ms is six frame periods, so each flash lands 0.7 ms later in the 33.3 ms frame cycle and the flashes sweep the whole cycle in ~10 s, like a vernier. From the recorded LED brightness against each frame's timestamp, it measures each camera's exposure window relative to its own timestamp — proof that the <em>images</em> line up, not only the timestamps. The analysis is validated on synthetic data; the LED wiring is still to be done.</p>
 <div class="pager"><a href="features.html"><small>Previous</small>Operator</a><a class="next" href="performance.html"><small>Next</small>Performance</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

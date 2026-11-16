@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How it works - Argus</title>
+<title>How it works - Argus Labs</title>
 <meta name="description" content="Capture pipeline, driver timestamps, hardware frame sync, the clock model, supervision, health and the session format.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html" aria-current="page">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
@@ -30,7 +30,7 @@
 
 <h2 id="architecture">Architecture</h2>
 <div class="diagram"><svg class="dg" viewBox="0 0 960 516" role="img" aria-labelledby="arch-t">
-<title id="arch-t">Argus architecture: sensors, per-camera capture, control, outputs and offline tools</title>
+<title id="arch-t">Argus Labs architecture: sensors, per-camera capture, control, outputs and offline tools</title>
 <defs>
   <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ar" d="M0,0 L10,5 L0,10 z"/></marker>
   <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ar hi" d="M0,0 L10,5 L0,10 z"/></marker>
@@ -85,7 +85,7 @@
 <rect class="grp" x="794" y="40" width="150" height="330" rx="10"/>
 <rect class="bx hi" x="804" y="56" width="130" height="114" rx="7"/>
 <text x="816" y="78">session folder</text><text class="s" x="816" y="98">mkv + frames.csv</text><text class="s" x="816" y="114">imu, gnss, clock</text><text class="s" x="816" y="130">sync, quality, host</text><text class="s" x="816" y="146">markers, manifest</text>
-<rect class="bx" x="804" y="182" width="130" height="38" rx="7"/><text x="816" y="206">Argus GUI</text>
+<rect class="bx" x="804" y="182" width="130" height="38" rx="7"/><text x="816" y="206">Argus Labs GUI</text>
 <rect class="bx" x="804" y="228" width="130" height="38" rx="7"/><text x="816" y="252">phone page</text>
 <rect class="bx" x="804" y="274" width="130" height="38" rx="7"/><text x="816" y="298">Foxglove live</text>
 <path class="ln hi" d="M542,161 L802,161" marker-end="url(#a2)"/>
@@ -107,7 +107,7 @@
 
 <h2 id="capture-pipeline">Capture pipeline</h2>
 <p>The Tegra video input stamps every frame at end-of-frame from the SoC's TSC counter. Those stamps are excellent: about 15 µs of jitter, and all six cameras share the counter. The problem is that the TSC counts from power-on while <code>CLOCK_MONOTONIC</code> starts at kernel start, so the stamps look ~20 s “in the future”. GStreamer's <code>v4l2src</code> sanity-checks them, logs <em>“Timestamp does not correlate with any clock, ignoring driver timestamps”</em>, and silently stamps each frame with its <strong>dequeue time</strong> instead — which jitters by milliseconds whenever the CPU is busy.</p>
-<p>So Argus does not let GStreamer capture. Each camera has its own capture thread that:</p>
+<p>So Argus Labs does not let GStreamer capture. Each camera has its own capture thread that:</p>
 <ol>
   <li>opens the device, negotiates 1920×1536 UYVY at 30 fps (and checks the negotiated format, because V4L2 silently clamps out-of-range requests);</li>
   <li>dequeues mmap buffers itself and keeps the driver timestamp and the sequence number of every frame;</li>
@@ -141,10 +141,10 @@
 <path class="ln hi" d="M626,90 L674,52" marker-end="url(#b1)"/>
 <path class="ln hi" d="M810,80 L810,98" marker-end="url(#b1)"/>
 </svg></div>
-<p>The ISX031 supports a readout trigger: with <code>frame_sync_mode=1</code> the sensor starts its readout on an edge of the deserializer's FSIN pulse instead of its own crystal. Two independent settings must both be right: <strong>SW2</strong>, a physical switch on the deserializer board that selects the on-board generator or an external input, and <strong><code>frame_sync_mode</code></strong>, a per-camera driver control that defaults to 0 and is lost at every reboot or driver reload. Argus uses the internal generator.</p>
+<p>The ISX031 supports a readout trigger: with <code>frame_sync_mode=1</code> the sensor starts its readout on an edge of the deserializer's FSIN pulse instead of its own crystal. Two independent settings must both be right: <strong>SW2</strong>, a physical switch on the deserializer board that selects the on-board generator or an external input, and <strong><code>frame_sync_mode</code></strong>, a per-camera driver control that defaults to 0 and is lost at every reboot or driver reload. Argus Labs uses the internal generator.</p>
 
 <h3>Proving the lock</h3>
-<p>Free-running, the cameras share a clock through the deserializer, so they do not drift, but each starts at an arbitrary phase: over six restarts the worst spread was 22.4, 24.1, 25.9, 27.5, 28.2 and 31.5 ms — always under one frame period, never the same twice. A tight spread could therefore happen by luck, so Argus judges the lock continuously from driver timestamps of every frame set:</p>
+<p>Free-running, the cameras share a clock through the deserializer, so they do not drift, but each starts at an arbitrary phase: over six restarts the worst spread was 22.4, 24.1, 25.9, 27.5, 28.2 and 31.5 ms — always under one frame period, never the same twice. A tight spread could therefore happen by luck, so Argus Labs judges the lock continuously from driver timestamps of every frame set:</p>
 <div class="table"><table>
 <tr><th></th><th class="num">Free-running</th><th class="num">Sync on</th></tr>
 <tr><td>Median spread between the six cameras</td><td class="num">~20–24 ms</td><td class="num"><strong>29 µs</strong></td></tr>
@@ -189,7 +189,7 @@
 <h2 id="imu-and-gnss">IMU and GNSS</h2>
 <ul>
   <li><strong>IMU:</strong> Xsens Xbus / MTData2 frames, checksum-verified; packet-counter gaps are counted as lost samples; the status word (self-test, filter valid, SyncIn marker) is recorded in <code>imu.csv</code>. The FTDI latency timer is set to 1 ms by a udev rule — with the factory 16 ms, host-timestamp residuals would be near 52 ms instead of the measured 1.18 ms (p95).</li>
-  <li><strong>GNSS:</strong> <code>gpsd</code> keeps owning the receiver (it also feeds chrony). Argus reads fixes from gpsd's JSON and taps the binary UBX stream through gpsd's raw watch for the raw-measurement log (<code>gnss_raw.ubx</code>, for PPK), interference reports (MON-RF, NAV-STATUS) and time marks. RTK corrections from an NTRIP caster are CRC-checked and written to the receiver <em>through</em> gpsd, so no second process ever opens the port.</li>
+  <li><strong>GNSS:</strong> <code>gpsd</code> keeps owning the receiver (it also feeds chrony). Argus Labs reads fixes from gpsd's JSON and taps the binary UBX stream through gpsd's raw watch for the raw-measurement log (<code>gnss_raw.ubx</code>, for PPK), interference reports (MON-RF, NAV-STATUS) and time marks. RTK corrections from an NTRIP caster are CRC-checked and written to the receiver <em>through</em> gpsd, so no second process ever opens the port.</li>
 </ul>
 
 <h2 id="supervision-and-recovery">Supervision and recovery</h2>
@@ -197,7 +197,7 @@
   <li><strong>One camera, one thread, one pipeline.</strong> A camera fault (no frames, a pipeline error, a driver reset) is contained to that camera.</li>
   <li><strong>Supervisor every 0.5 s.</strong> A camera with no frames for <code>stall_s</code> (1.0 s) is restarted alone, with exponential back-off. Measured with three injected stalls: frames back 2.1–2.4 s after the last good frame, the other five untouched, re-locked at ~29 µs. A restarted camera writes a new segment run (<code>_rNN_</code>), so the frame-to-file mapping stays exact.</li>
   <li><strong>Safe writes.</strong> Every file has exactly one writer (no locks). Each writer flushes to the OS at least once a second, and the supervisor fsyncs every file at each checkpoint; <code>manifest.json</code> is replaced atomically. A write error (disk full, I/O error) stops the recording safely, and low disk stops it before it runs out. A SIGKILL in the middle of a recording leaves a usable session — this is tested.</li>
-  <li><strong>One instance.</strong> An instance lock stops two Argus processes from fighting over the cameras.</li>
+  <li><strong>One instance.</strong> An instance lock stops two Argus Labs processes from fighting over the cameras.</li>
   <li><strong>Audit log.</strong> <code>~/.local/state/avrig/audit.log</code>: one JSON line per operator or lifecycle action (record start / stop / refused, sync, offload, prune, calibration).</li>
 </ul>
 
@@ -235,7 +235,7 @@
 <p>Everything heavy runs after the drive at the lowest CPU and I/O priority, refuses to start while recording, and stops itself if a recording starts. The perception models run as TensorRT FP16 engines through a small runner on the CUDA driver API with unified memory (on Orin, CPU and GPU share DRAM, so nothing is copied). One rule shaped that runner: <strong>on Jetson, CPU code must not touch managed memory while any GPU kernel of the same process is running</strong>. Running models from parallel threads violated it and crashed the process, so every TensorRT call goes through one GPU lock, held through the whole inference.</p>
 <div class="pager"><a href="getting-started.html"><small>Previous</small>Get started</a><a class="next" href="features.html"><small>Next</small>Operator</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

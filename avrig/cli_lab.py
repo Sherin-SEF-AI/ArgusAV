@@ -253,8 +253,14 @@ def cmd_tag(args) -> int:
 def cmd_anonymize(args) -> int:
     from . import anonymize
     t0 = time.monotonic()
+    cfg = _cli().load_cfg(args)
+    mask_path = None if args.no_ego_mask else (args.ego_mask or cfg.ego_mask_path or None)
+    ego = anonymize.load_ego_mask(mask_path) if mask_path else None
+    if ego:
+        print(f"own-vehicle mask: {mask_path} ({', '.join(sorted(ego))})")
     r = anonymize.anonymize(args.session, args.output, not args.no_faces, not args.no_plates, not args.no_heads,
-                            args.workers, _tools().progress)
+                            args.workers, _tools().progress, plate_zones=not args.no_plate_zones, ego_mask=ego,
+                            vehicle_text=not (args.no_vehicle_text or args.no_plates))
     _tools().done_progress()
     print(f"{r['out']}: {r['frames']} frames in {time.monotonic() - t0:.0f} s; blurred {r['boxes']}")
     audit("anonymize", session=args.session, out=r["out"], boxes=r["boxes"])
@@ -435,6 +441,14 @@ def register(sub):
     p.add_argument("--no-faces", action="store_true")
     p.add_argument("--no-plates", action="store_true")
     p.add_argument("--no-heads", action="store_true", help="do not blur the head of people whose face was missed")
+    p.add_argument("--no-plate-zones", action="store_true",
+                   help="do not blur the plate area of vehicles whose plate was missed")
+    p.add_argument("--ego-mask", metavar="JSON",
+                   help="own-vehicle areas to always blur: {camera: [[x, y], ...]} as fractions of the frame "
+                        "(default: ego_mask_path in the config)")
+    p.add_argument("--no-ego-mask", action="store_true", help="ignore ego_mask_path from the config")
+    p.add_argument("--no-vehicle-text", action="store_true",
+                   help="do not blur text on truck and bus bodies (painted registration numbers)")
     p.add_argument("--workers", type=int, default=3, help="cameras processed in parallel")
     p.set_defaults(fn=cmd_anonymize)
     p = sub.add_parser("dataset", help="export a session as a nuScenes- or KITTI-style dataset")

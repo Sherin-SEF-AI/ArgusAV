@@ -3,25 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Argus - synced six-camera data collection on Jetson</title>
-<meta name="description" content="Argus records six hardware-synchronised GMSL2 cameras, an IMU and GNSS on a Jetson AGX Orin, and turns the drives into AV-lab data.">
+<title>Argus Labs - synced six-camera data collection on Jetson</title>
+<meta name="description" content="Argus Labs records six hardware-synchronised GMSL2 cameras, an IMU and GNSS on a Jetson AGX Orin, and turns the drives into AV-lab data.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html" aria-current="page">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
 <main><section class="hero">
   <div>
-    <img class="logo" src="img/argus.svg" alt="Argus logo" width="72" height="72">
+    <img class="logo" src="img/argus.svg" alt="Argus Labs logo" width="72" height="72">
     <div class="kicker">AV data collection on Jetson AGX Orin</div>
-    <h1>Argus</h1>
+    <h1>Argus Labs</h1>
     <p class="lead">Six GMSL2 cameras captured on one hardware trigger, an IMU and a GNSS receiver on one clock, recorded as annotation-ready H.265 with a per-frame capture timestamp. After the drive, the same tool turns the recordings into searchable, labelled, mapped AV-lab data.</p>
-    <p>Argus is the display name; the command is <code>avrig</code>.</p>
+    <p>Argus Labs is the display name; the command is <code>avrig</code>.</p>
     <div class="cta">
       <a class="btn primary" href="getting-started.html">Get started</a>
       <a class="btn" href="how-it-works.html">How it works</a>
@@ -29,7 +29,7 @@
     </div>
   </div>
   <div class="hero-shot">
-    <img src="img/main.png" alt="The Argus operator window with six live camera views and the status chip bar" loading="eager" onerror="this.onerror=null;this.src='img/argus.svg';this.parentNode.classList.add('hero-fallback')">
+    <img src="img/main.png" alt="The Argus Labs operator window with six live camera views and the status chip bar" loading="eager" onerror="this.onerror=null;this.src='img/argus.svg';this.parentNode.classList.add('hero-fallback')">
   </div>
 </section>
 
@@ -42,7 +42,7 @@
 </div>
 
 <h2 id="what-it-is">What it is</h2>
-<p>Argus is the data-collection application for one specific rig: a Jetson AGX Orin 64 GB with six e-con STURDeCAM31 cameras (four wide, two narrow) on a GMSL2 deserializer, an Xsens MTi-3 IMU and a u-blox F9P GNSS receiver. It was built for a data-collection team and an AV lab, and is designed so that <strong>every fault is attributable to a sensor, a timestamp and a cause</strong>: a session that is not trustworthy says so instead of looking fine.</p>
+<p>Argus Labs is the data-collection application for one specific rig: a Jetson AGX Orin 64 GB with six e-con STURDeCAM31 cameras (four wide, two narrow) on a GMSL2 deserializer, an Xsens MTi-3 IMU and a u-blox F9P GNSS receiver. It was built for a data-collection team and an AV lab, and is designed so that <strong>every fault is attributable to a sensor, a timestamp and a cause</strong>: a session that is not trustworthy says so instead of looking fine.</p>
 
 <div class="grid">
   <a class="card" href="how-it-works.html#capture-pipeline"><span class="tag">Capture</span><h3>True capture time</h3><p>Frames are dequeued directly from V4L2 with the driver's SoC TSC timestamp (~15 µs jitter), not GStreamer's arrival time (milliseconds under load).</p></a>
@@ -74,7 +74,7 @@
 </div>
 <div class="pager"><a class="next" href="getting-started.html"><small>Next</small>Get started</a></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

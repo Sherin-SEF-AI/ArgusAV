@@ -464,6 +464,9 @@ def label_session(session: str, cfg, hz: float = 10.0, label_hz: float = 2.0, de
                 note="monocular pre-labels: review before use")
     from .util import atomic_json
     atomic_json(os.path.join(session, "labels3d.json"), dict(meta, instances_detail=res["instances"]))
+    from .provenance import record_lineage
+    record_lineage(session, "labels3d.csv", ["tracks2d.csv", "manifest.json"] + (["trajectory.csv"] if traj is not None else []),
+                   "label3d", dict(nominal=nominal, hz=hz))
     return meta
 
 

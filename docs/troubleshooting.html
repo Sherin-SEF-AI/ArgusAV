@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Troubleshooting - Argus</title>
+<title>Troubleshooting - Argus Labs</title>
 <meta name="description" content="Failure modes seen on this rig, their signature, and the fix.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,17 +11,17 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html" aria-current="page">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
-<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#argus-will-not-start">Argus will not start</a><a href="#recording-is-blocked">Recording is blocked</a><a href="#cameras-stream-but-are-not-simultaneous">Cameras stream but are not simultaneous</a><a href="#cameras-starve-with-sync-on">Cameras starve with sync on</a><a href="#a-camera-is-missing">A camera is missing</a><a href="#no-cameras-after-a-system-update">No cameras after a system update</a><a href="#every-camera-port-fails-at-the-serializer">Every camera port fails at the serializer</a><a href="#format-errors">Format errors</a><a href="#gnss-will-not-fix">GNSS will not fix</a><a href="#clock-is-not-gnss">Clock is not GNSS</a><a href="#lab-jobs">Lab jobs</a><a href="#foxglove-and-the-phone-page">Foxglove and the phone page</a></aside><article class="content"><div class="kicker">Troubleshooting</div>
+<main><div class="doc"><aside class="toc"><b>On this page</b><a href="#argus-will-not-start">Argus Labs will not start</a><a href="#recording-is-blocked">Recording is blocked</a><a href="#cameras-stream-but-are-not-simultaneous">Cameras stream but are not simultaneous</a><a href="#cameras-starve-with-sync-on">Cameras starve with sync on</a><a href="#a-camera-is-missing">A camera is missing</a><a href="#no-cameras-after-a-system-update">No cameras after a system update</a><a href="#every-camera-port-fails-at-the-serializer">Every camera port fails at the serializer</a><a href="#format-errors">Format errors</a><a href="#gnss-will-not-fix">GNSS will not fix</a><a href="#clock-is-not-gnss">Clock is not GNSS</a><a href="#lab-jobs">Lab jobs</a><a href="#foxglove-and-the-phone-page">Foxglove and the phone page</a></aside><article class="content"><div class="kicker">Troubleshooting</div>
 <h1>When something is wrong</h1>
 <p class="lead">Failure modes actually seen on this rig, how each one looks, and what fixed it. Start with <code>avrig check</code>: its health lines name the component and usually the fix.</p>
 
-<h2 id="argus-will-not-start">Argus will not start</h2>
+<h2 id="argus-will-not-start">Argus Labs will not start</h2>
 <h3>“Cameras busy” / another instance</h3>
-<p>A camera can be opened by one process at a time, and Argus holds an instance lock. Close any other capture tool, stop hands-free mode (<code>sudo systemctl stop avrig-auto</code>), and find a holder with:</p>
+<p>A camera can be opened by one process at a time, and Argus Labs holds an instance lock. Close any other capture tool, stop hands-free mode (<code>sudo systemctl stop avrig-auto</code>), and find a holder with:</p>
 <pre><code>fuser /dev/video0          <span class="c"># which process has the camera</span>
 pgrep -af avrig</code></pre>
 <p>Started from the desktop icon, the reason appears in a dialog. Never <code>kill -9</code> a process that is streaming: skipping stream-off can wedge the sensor until a reboot. Stop it with SIGINT / SIGTERM.</p>
@@ -40,14 +40,14 @@ pgrep -af avrig</code></pre>
 </table></div>
 
 <h2 id="cameras-stream-but-are-not-simultaneous">Cameras stream but are not simultaneous</h2>
-<p><strong>Signature:</strong> nominal fps, zero drops, everything looks healthy — but SYNC says FREE-RUN and the spread is tens of milliseconds. <code>frame_sync_mode</code> reset to 0 at the last reboot or driver reload. There is no other symptom, which is why Argus measures the lock every second and preflight requires it. Fix: <code>avrig sync on</code>.</p>
+<p><strong>Signature:</strong> nominal fps, zero drops, everything looks healthy — but SYNC says FREE-RUN and the spread is tens of milliseconds. <code>frame_sync_mode</code> reset to 0 at the last reboot or driver reload. There is no other symptom, which is why Argus Labs measures the lock every second and preflight requires it. Fix: <code>avrig sync on</code>.</p>
 
 <h2 id="cameras-starve-with-sync-on">Cameras starve with sync on</h2>
 <p><strong>Signature:</strong> ~1 fps in bursts of 3–4 frames separated by ~2.5 s stalls; the kernel log shows the sensor's ISP asking for a reset. The deserializer's trigger switch is on <em>external</em> and nothing is driving the trigger input. Move it back to internal, or wire a 30 Hz, 1.8 V trigger (through a level shifter — 3.3 V over-drives it).</p>
 
 <h2 id="a-camera-is-missing">A camera is missing</h2>
 <ul>
-  <li><strong><code>/dev/videoN</code> numbering is not stable.</strong> Plugging in another V4L2 device (a USB webcam) renumbers the cameras, and a camera that fails to probe shifts the others. Argus identifies cameras by the sensor's I²C bus and address in the device name (<code>isx031 9-0043</code> …), not by node number; <code>avrig wizard</code> verifies physical positions one lens at a time.</li>
+  <li><strong><code>/dev/videoN</code> numbering is not stable.</strong> Plugging in another V4L2 device (a USB webcam) renumbers the cameras, and a camera that fails to probe shifts the others. Argus Labs identifies cameras by the sensor's I²C bus and address in the device name (<code>isx031 9-0043</code> …), not by node number; <code>avrig wizard</code> verifies physical positions one lens at a time.</li>
   <li><strong>To re-enumerate cameras, reboot.</strong> Reloading the driver can lose one port in a race with the deserializer's reset. Never write to the driver's sysfs <code>bind</code>/<code>unbind</code> — it panics the kernel.</li>
   <li><strong>Two ports on the second deserializer are unpopulated</strong> on this rig; their probe failures at boot are expected.</li>
 </ul>
@@ -64,7 +64,7 @@ pgrep -af avrig</code></pre>
 <p><strong>Signature:</strong> every port on both deserializers fails on the first register write (I²C NACK, probe error −5), while the frame-sync MCU on the always-on bus still answers. That is a hardware fault — the board has power but its camera section does not. Check the deserializer board's power input and reseat the board cable and the coax. On this rig both deserializers failed this way over several days and the board was serviced.</p>
 
 <h2 id="format-errors">Format errors</h2>
-<p>The sensor is 1920 wide, never 2048. V4L2 silently clamps an out-of-range request (asking for 2048 returns 1920 with success), while GStreamer refuses with <code>not-negotiated</code>. Argus checks the negotiated format of every camera.</p>
+<p>The sensor is 1920 wide, never 2048. V4L2 silently clamps an out-of-range request (asking for 2048 returns 1920 with success), while GStreamer refuses with <code>not-negotiated</code>. Argus Labs checks the negotiated format of every camera.</p>
 <p><em>“Signal lost — No input source was detected”</em> from GStreamer is benign on this platform when frames are flowing: the plugin queries an input concept the Tegra driver does not implement. It matters only together with zero frames — the cold-sync failure.</p>
 
 <h2 id="gnss-will-not-fix">GNSS will not fix</h2>
@@ -88,7 +88,7 @@ pgrep -af avrig</code></pre>
 </ul>
 <div class="pager"><a href="cli.html"><small>Previous</small>Commands</a><a class="next" href="lessons.html"><small>Next</small>Eng. notes</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

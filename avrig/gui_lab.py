@@ -1,7 +1,6 @@
-"""avrig Lab window: search by meaning (Explore), collection coverage and curation,
-scenario search and coverage, rig health trends with the mount guard, the calibration
-studio, 3D pre-labels and map layers, and per-session processing (events, trajectory,
-tagging, privacy blurring, datasets, event-only copies, Kalibr export, LED sync analysis).
+"""Argus Labs workbench (Lab window): a grouped sidebar of pages (Find: Explore, Scenarios, Mining;
+Understand: Coverage, Collection; Label & export; Quality: rig and camera health,
+calibration studio; Governance: campaigns and compliance; Run: per-session processing).
 
 Like the session browser, all heavy work runs as `avrig` subprocesses at the lowest
 priority, one at a time, and is refused while recording (here and by the CLI).
@@ -20,7 +19,7 @@ from PyQt6.QtGui import QColor, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                              QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
                              QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
-                             QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                             QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import storage
 from . import APP_NAME
@@ -159,7 +158,8 @@ class SessionPicker(QTableWidget):
         self.refresh()
 
     def refresh(self):
-        self.rows = storage.list_sessions(self.rig.cfg.out_dir)
+        from .overview import library_dirs
+        self.rows = [s for d in library_dirs(self.rig.cfg) for s in storage.list_sessions(d)]
         self.setRowCount(len(self.rows))
         for i, s in enumerate(self.rows):
             d = s["dir"]
@@ -488,22 +488,29 @@ class ProcessTab(QWidget):
         v = QVBoxLayout(self)
         self.pick = SessionPicker(lab.rig)
         v.addWidget(self.pick, 1)
-        grid = [
-            [("Refresh", self.pick.refresh), ("Auto events", lambda: self.each("events", "--write")),
-             ("Trajectory", lambda: self.each("trajectory")), ("Tag objects", lambda: self.each("tag")),
-             ("Embed (search)", lambda: self.each("embed")), ("Catalog", lambda: self.lab.jobs.run(["catalog"]))],
-            [("Anonymize copy", lambda: self.one("anonymize")),
-             ("Dataset nuScenes", lambda: self.dataset("nuscenes")),
-             ("Dataset KITTI", lambda: self.dataset("kitti")),
-             ("Event-only copy", lambda: self.one("retain")),
-             ("LED sync analysis", lambda: self.one("ledsync", "--analyze"))],
-            [("Models: status", lambda: self.lab.jobs.run(["models"])),
-             ("Models: download + build", lambda: self.lab.jobs.run(["models", "--fetch", "--build"])),
-             ("Rig trends", lambda: self.lab.jobs.run(["trends"])),
-             ("Depot offload now", lambda: self.lab.jobs.run(["depot"]))],
+        groups = [
+            ("Prepare", [("Refresh", self.pick.refresh), ("Process (standard steps)", lambda: self.each("pipeline")),
+                         ("Auto events", lambda: self.each("events", "--write")),
+                         ("Trajectory", lambda: self.each("trajectory")), ("Tag objects", lambda: self.each("tag")),
+                         ("Embed (search)", lambda: self.each("embed")), ("Catalog", lambda: self.lab.jobs.run(["catalog"]))]),
+            ("Find", [("Edge cases", self.edgecases), ("Busiest moments (frames)", lambda: self.one("sheet", "--busy", "4")),
+                      ("Characterize sensors", lambda: self.each("characterize"))]),
+            ("Share", [("Anonymize copy", lambda: self.one("anonymize")), ("Own-car mask check", lambda: self.one("egomask")),
+                       ("Hand-over package", lambda: self.one("handover")),
+                       ("Dataset nuScenes", lambda: self.dataset("nuscenes")), ("Dataset KITTI", lambda: self.dataset("kitti")),
+                       ("Event-only copy", lambda: self.one("retain"))]),
+            ("Rig", [("Models: status", lambda: self.lab.jobs.run(["models"])),
+                     ("Models: download + build", lambda: self.lab.jobs.run(["models", "--fetch", "--build"])),
+                     ("LED sync analysis", lambda: self.one("ledsync", "--analyze")),
+                     ("Rig trends", lambda: self.lab.jobs.run(["trends"])),
+                     ("Depot offload now", lambda: self.lab.jobs.run(["depot"]))]),
         ]
-        for line in grid:
+        for title, line in groups:
             row = QHBoxLayout()
+            cap = QLabel(title)
+            cap.setObjectName("k")
+            cap.setFixedWidth(56)
+            row.addWidget(cap)
             for name, fn in line:
                 b = QPushButton(name)
                 b.clicked.connect(fn)
@@ -531,6 +538,15 @@ class ProcessTab(QWidget):
         else:
             self.lab.jobs.run([cmd, sel[0], *opts])
 
+    def edgecases(self):
+        """Edge cases of one session; clips come from its anonymized copy when there is one."""
+        sel = self.pick.selected()
+        if len(sel) != 1:
+            QMessageBox.information(self, APP_NAME, "select one session")
+            return
+        anon = sel[0].rstrip("/") + "_anon"
+        self.lab.jobs.run(["edgecases", sel[0]] + (["--clips-from", anon] if os.path.isdir(anon) else []))
+
     def dataset(self, fmt):
         sel = self.pick.selected()
         if len(sel) != 1:
@@ -539,30 +555,154 @@ class ProcessTab(QWidget):
         self.lab.jobs.run(["dataset", sel[0], "--format", fmt] + (["--annotate"] if self.annot.isChecked() else []))
 
 
+class Pages(QWidget):
+    """Grouped sidebar + page stack. Pages are built on first visit (fast window start, and
+    a page whose optional module fails to import shows why instead of breaking the Lab).
+    Keeps the QTabWidget calls other code uses: count, tabText, widget, setCurrentIndex."""
+
+    def __init__(self, settings=None):
+        super().__init__()
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QStackedWidget
+        self._item_cls = QListWidgetItem
+        self.settings = settings
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+        self.nav = QListWidget()
+        self.nav.setFixedWidth(200)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav.setStyleSheet("QListWidget { background:#15181c; border:1px solid #2a2f36; }"
+                               "QListWidget::item { padding:5px 8px; }"
+                               "QListWidget::item:selected { background:#2a5d9f; color:#fff; }")
+        self.stack = QStackedWidget()
+        h.addWidget(self.nav)
+        h.addWidget(self.stack, 1)
+        self.pages: list = []                        # [title, factory, widget or None, nav row]
+        self.nav.currentRowChanged.connect(self._row)
+
+    def section(self, title: str):
+        it = self._item_cls(title.upper())
+        it.setFlags(Qt.ItemFlag.NoItemFlags)
+        f = it.font()
+        f.setBold(True)
+        f.setPointSize(8)
+        it.setFont(f)
+        it.setForeground(QColor("#7d8590"))
+        self.nav.addItem(it)
+
+    def add(self, title: str, factory, tip: str = ""):
+        it = self._item_cls("   " + title)
+        it.setToolTip(tip)
+        self.nav.addItem(it)
+        holder = QWidget()
+        QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+        self.stack.addWidget(holder)
+        self.pages.append([title, factory, None, self.nav.count() - 1, holder])
+
+    def addTab(self, widget, title: str):              # QTabWidget compatibility
+        self.add(title.replace("&&", "&"), lambda: widget)
+
+    def _build(self, i: int):
+        p = self.pages[i]
+        if p[2] is None:
+            try:
+                p[2] = p[1]()
+            except Exception as e:                       # optional module missing / broken
+                p[2] = QLabel(f"{p[0]} is not available:\n\n{type(e).__name__}: {e}")
+                p[2].setAlignment(Qt.AlignmentFlag.AlignCenter)
+                p[2].setWordWrap(True)
+            p[4].layout().addWidget(p[2])
+        return p[2]
+
+    def _row(self, row: int):
+        for i, p in enumerate(self.pages):
+            if p[3] == row:
+                self._build(i)
+                self.stack.setCurrentIndex(i)
+                if self.settings is not None:
+                    self.settings.setValue("lab_page", p[0])
+                return
+
+    def count(self) -> int:
+        return len(self.pages)
+
+    def tabText(self, i: int) -> str:
+        return self.pages[i][0]
+
+    def widget(self, i: int):
+        return self._build(i)
+
+    def currentIndex(self) -> int:
+        return self.stack.currentIndex()
+
+    def setCurrentIndex(self, i: int):
+        self.nav.setCurrentRow(self.pages[i][3])
+
+    def select(self, title: str) -> bool:
+        for i, p in enumerate(self.pages):
+            if p[0] == title:
+                self.setCurrentIndex(i)
+                return True
+        return False
+
+
+def _optional(module: str, cls: str):
+    """Factory for a page from an optional module (imported only when first opened)."""
+    def make(lab):
+        import importlib
+        return getattr(importlib.import_module(f"avrig.{module}"), cls)(lab)
+    return make
+
+
 class LabWindow(QWidget):
     def __init__(self, rig, config_path: str | None):
         super().__init__(None, Qt.WindowType.Window)
+        from PyQt6.QtCore import QSettings
         self.rig, self.windows = rig, []
         self.setWindowTitle(f"{APP_NAME} - Lab")
-        self.resize(1180, 800)
+        self.resize(1280, 820)
         v = QVBoxLayout(self)
         self.jobs = Jobs(rig, config_path)
         from .gui_lab2 import CollectionTab, ExploreTab, LabelsTab
-        self.tabs = QTabWidget()
-        self.tabs.addTab(ExploreTab(self), "Explore")
-        self.tabs.addTab(SearchTab(self), "Scenarios")
-        self.tabs.addTab(CollectionTab(self), "Collection")
-        self.tabs.addTab(LabelsTab(self), "Labels && maps")
-        self.tabs.addTab(TrendsTab(self), "Rig health")
-        self.tabs.addTab(CalibTab(self), "Calibration")
-        self.tabs.addTab(ProcessTab(self), "Processing")
+        settings = QSettings("Argus", "argus")
+        self.tabs = Pages(settings)
+        layout = [
+            ("Home", [("Overview", _optional("gui_home", "OverviewTab"),
+                       "the library at a glance: what is recorded, what is processed, what to do next")]),
+            ("Find", [("Explore", ExploreTab, "search frames by meaning: text, more like this, an image"),
+                      ("Scenarios", SearchTab, "scenario catalog: conditions, events, objects, place"),
+                      ("Mining", _optional("gui_mining", "MiningTab"),
+                       "scenarios over time ('car cuts in, then brakes'), in English or as a query")]),
+            ("Understand", [("Coverage", _optional("gui_odd", "CoverageTab"),
+                             "operational design domain coverage against targets, and the gaps"),
+                            ("Collection", CollectionTab, "hours per scene condition, rarest frames, curation")]),
+            ("Label & export", [("Labels & maps", LabelsTab, "3D pre-labels, CVAT review, map layers, Foxglove"),
+                                ("Exports", _optional("gui_sim", "ExportsTab"),
+                                 "simulation-ready exports: Cosmos controls, layered reconstruction, "
+                                 "occupancy, Nerfstudio")]),
+            ("Quality", [("Rig health", TrendsTab, "trends across sessions, mount and RF guards"),
+                         ("Camera health", _optional("gui_sim", "CamHealthTab"),
+                          "lens blockage / soiling and camera-to-camera calibration drift"),
+                         ("Calibration", CalibTab, "calibration studio")]),
+            ("Research", [("Studies & splits", _optional("gui_home", "ResearchTab"),
+                           "studies, train / val / test splits by place, sensor characterization, Python API")]),
+            ("Governance", [("Campaigns & compliance", _optional("gui_ops", "OpsTab"),
+                             "trigger campaigns, privacy zones, retention, signed sessions, incidents")]),
+            ("Run", [("Processing", ProcessTab, "per-session processing jobs")]),
+        ]
+        for section, pages in layout:
+            self.tabs.section(section)
+            for title, cls, tip in pages:
+                self.tabs.add(title, lambda c=cls: c(self), tip)
         from PyQt6.QtWidgets import QSplitter
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(self.tabs)
         split.addWidget(self.jobs)
-        split.setSizes([640, 140])
+        split.setSizes([660, 140])
         split.setChildrenCollapsible(False)
         v.addWidget(split)
+        if not self.tabs.select(settings.value("lab_page", "Overview", type=str)):
+            self.tabs.select("Overview")
         self.timer = QTimer(self, timeout=self._state)
         self.timer.start(1000)
 

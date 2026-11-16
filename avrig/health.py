@@ -124,9 +124,13 @@ def evaluate(snap: dict, cfg) -> list[Issue]:
             "sudo bash setup/avrig-install.sh --collection-mode")
     for iface, st in (snap.get("can") or {}).items():
         if st["state"] != "up":
-            add(False, "can", f"{iface} is {st['state']}", "sudo bash setup/avrig-install.sh --can")
+            add(False, "can", f"{iface} is {st['state']}",
+                "plug in the adapter / sudo bash setup/usbcan-install.sh" if iface.startswith("usbcan")
+                else "sudo bash setup/avrig-install.sh --can")
         elif st["silent_s"] is None or st["silent_s"] > 5:
-            add(False, "can", f"{iface} up but no frames", "check the vehicle CAN connection / bitrate")
+            add(False, "can", f"{iface} up but no frames",
+                "ignition on? check the OBD connection / bitrate (avrig can --scan)" if iface.startswith("usbcan")
+                else "check the vehicle CAN connection / bitrate")
     gr = snap.get("gnss_raw")
     if gr is not None:
         if gr["err"]:

@@ -6,6 +6,7 @@
 #
 #   sudo bash install.sh              install, then calibrate if the receiver has a fix
 #   sudo bash install.sh calibrate    (re)measure the latency offset and promote GNSS
+#   sudo bash install.sh calibrate 0.078   promote GNSS with a known offset (no measuring)
 #   sudo bash install.sh uninstall    remove the GNSS refclock and restore gpsd defaults
 #
 # WHY CALIBRATION: without PPS the time arrives inside a USB message, some tens of ms
@@ -28,22 +29,54 @@ CONFEOF
 }
 
 gnss_fix() {   # true if gpsd reports a 2D/3D fix within 10 s
-    timeout 10 gpspipe -w 2>/dev/null | grep -m1 -q '"class":"TPV".*"mode":[23]'
+    # Capture first, then match: under pipefail, "gpspipe | grep -q" fails whenever there
+    # IS a fix, because grep exits at the first match and gpspipe then dies of SIGPIPE.
+    # gpsd may also have just been restarted, so give it the full 10 s to report.
+    local out
+    out="$(timeout 10 gpspipe -w 2>/dev/null || true)"
+    grep -q '"class":"TPV".*"mode":[23]' <<<"$out"
 }
 
-calibrate() {
+calibrate() {   # $1 (optional) = a known latency offset in seconds: promote it, no measuring
     if ! gnss_fix; then
         echo "!! no GNSS fix - put the antenna under open sky, then: sudo bash $0 calibrate"
         return 1
     fi
+    if [ -n "${1:-}" ]; then
+        awk -v o="$1" 'BEGIN{exit !(o ~ /^-?[0-9]*\.?[0-9]+$/ && o > -0.5 && o < 0.5 && o != 0)}' \
+            || { echo "!! offset must be seconds, e.g. 0.078191452"; return 1; }
+        echo "-> promoting GNSS to master with the given offset ${1}s"
+        refclock "$1" "prefer trust"
+        sleep 30
+        chronyc sources | sed -n '1,2p;/GNSS/p'
+        chronyc tracking | sed -n '1,4p'
+        return 0
+    fi
+    # The measurement is only as good as the clock it is measured against. Keep the
+    # current setting so a failed or rejected run does not demote a working GNSS master.
+    local prev
+    prev="$(cat "$CONF" 2>/dev/null || true)"
+    restore() {
+        if [ -n "$prev" ]; then printf '%s\n' "$prev" > "$CONF"; systemctl restart chrony
+            echo "   previous clock setting restored"; fi
+    }
     echo "-> measuring GNSS latency against the current clock for ${SECS}s (GNSS monitor-only)"
     refclock 0.0 noselect
     sleep "$SECS"
+    # A mobile hotspot can move network time by 100+ ms; calibrating against that bakes the
+    # error into the GNSS clock. chrony's RMS offset says how steady the network clock was.
+    rms=$(chronyc -c tracking | cut -d, -f7)
+    if awk -v r="${rms:-1}" 'BEGIN{r=(r<0?-r:r); exit !(r > 0.005)}'; then
+        echo "!! network time is too unsteady to calibrate against (RMS offset ${rms}s, limit 0.005s)"
+        echo "   use a steady network (wired or office WiFi), or re-apply a known offset:"
+        echo "   sudo bash $0 calibrate <offset-seconds>"
+        restore; return 1
+    fi
     row=$(chronyc -c sourcestats | awk -F, '$1=="GNSS"')
-    [ -n "$row" ] || { echo "!! chrony has no GNSS samples - is gpsd feeding SHM 0?"; return 1; }
+    [ -n "$row" ] || { echo "!! chrony has no GNSS samples - is gpsd feeding SHM 0?"; restore; return 1; }
     off=$(echo "$row" | cut -d, -f7); sd=$(echo "$row" | cut -d, -f8); np=$(echo "$row" | cut -d, -f2)
     echo "   GNSS vs clock: offset ${off}s  std-dev ${sd}s  over ${np} samples"
-    if awk -v n="$np" 'BEGIN{exit !(n < 8)}'; then echo "!! too few samples"; return 1; fi
+    if awk -v n="$np" 'BEGIN{exit !(n < 8)}'; then echo "!! too few samples"; restore; return 1; fi
     echo "-> promoting GNSS to master with offset ${off}s"
     refclock "$off" "prefer trust"
     # Once GNSS is the reference its own offset reads ~0 whatever the sign, so verify
@@ -58,7 +91,7 @@ calibrate() {
         refclock "$neg" "prefer trust"
         sleep 60
     fi
-    chronyc sources | sed -n '1,3p;/GNSS/p'
+    chronyc sources | sed -n '1,2p;/GNSS/p'
     chronyc tracking | sed -n '1,4p'
 }
 
@@ -81,7 +114,7 @@ GEOF
     echo "-> gpsd: $(systemctl is-active gpsd)  chrony GNSS refclock installed (monitor-only)"
     calibrate || echo "   GNSS stays monitor-only until calibrated; NTP remains the reference"
     ;;
-calibrate) calibrate ;;
+calibrate) calibrate "${2:-}" ;;
 uninstall)
     rm -f "$CONF" /etc/udev/rules.d/99-rig-serial.rules
     last=$(ls -t /etc/default/gpsd.bak.* 2>/dev/null | head -1 || true)

@@ -186,7 +186,7 @@ def semantic_report(index, rare_hits, sizes, lab, hours, path, progress=None):
            "height:192px;object-fit:cover;border-radius:6px;background:#ddd;display:block}.bar{height:10px;background:#3b82f6;"
            "border-radius:3px}table{border-collapse:collapse}td,th{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left}"
            "@media(prefers-color-scheme:dark){body{background:#151515;color:#ddd}td,th{border-color:#333}.noimg{background:#333}}")
-    out = [f"<!doctype html><meta charset=utf-8><title>Argus collection</title><style>{css}</style>",
+    out = [f"<!doctype html><meta charset=utf-8><title>Argus Labs collection</title><style>{css}</style>",
            f"<h2>Collection coverage</h2><p>{len(index)} frames (1 per second per camera) from "
            f"{len(index.names)} sessions. Scene labels are zero-shot (CLIP): good for finding gaps, not ground truth.</p>"]
     for g, d in hours.items():

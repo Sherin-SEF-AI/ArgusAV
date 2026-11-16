@@ -122,7 +122,7 @@ def build(session: str, rep: dict, issues: list, out: str | None = None) -> str:
     a = rep.get("alignment", {})
     sp = a.get("spread") or {}
     parts = [f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
-             f"<title>Argus {e(man.get('label') or os.path.basename(session))}</title><style>{CSS}</style></head><body>",
+             f"<title>Argus Labs {e(man.get('label') or os.path.basename(session))}</title><style>{CSS}</style></head><body>",
              f"<h1>{e(man.get('label') or os.path.basename(session))} <span class='badge {h}'>{h}</span></h1>",
              f"<div class='dim'>{e(os.path.basename(session))} - {e(man.get('status'))} - "
              f"{man.get('duration_s', 0):.0f} s - generated {time.strftime('%Y-%m-%d %H:%M')}</div>"]
@@ -169,6 +169,14 @@ def build(session: str, rep: dict, issues: list, out: str | None = None) -> str:
                  + (f"<tr><th>GNSS time marks</th><td>{tm.get('pairs')} matched, residual {tm.get('residual_us', 0):.2f} us</td></tr>" if tm else "")
                  + "</table></div></div>")
     parts.append("<h2>Image quality</h2><div class=card>" + quality_timeline(qual, cams, t0) + "</div>")
+    ch = os.path.join(session, "camhealth.json")
+    if os.path.exists(ch):                       # `avrig camhealth`: blockage and calibration drift
+        try:
+            from .camhealth import html_section
+            with open(ch) as f:
+                parts.append("<h2>Camera health</h2>" + html_section(json.load(f)))
+        except Exception as ex:                  # a broken add-on file never breaks the report
+            parts.append(f"<h2>Camera health</h2><p>unreadable camhealth.json: {html.escape(str(ex))}</p>")
     parts.append("<h2>Markers</h2>" + ("<table><tr><th>t (s)</th><th>label</th><th>source</th><th>note</th></tr>" + "".join(
         f"<tr><td class=num>{(int(m['mono_ns']) - t0) / 1e9:.1f}</td><td>{e(m['label'])}</td><td>{e(m['source'])}</td>"
         f"<td>{e(m['note'])}</td></tr>" for m in marks) + "</table>" if marks else "<p class=dim>none</p>"))

@@ -90,11 +90,23 @@ class Rig:
         if self._started:
             return
         self._started = True
+        if self.cfg.mount_guard:
+            # Now, before any camera streams: loading OpenCV mid-recording stalls capture.
+            try:
+                from .mountguard import warm_up
+                log.info("OpenCV loaded for the mount guard in %.2f s", warm_up())
+            except Exception as e:      # the guard is an extra; never block the rig on it
+                log.warning("OpenCV warm-up failed (%s); mount guard may stall capture once", e)
         self.imu.start()
         self.gnss.start()
         if self.cfg.can_ifaces:
             from .can import CanLogger
             self.can = CanLogger(self.cfg.can_ifaces)
+            self.can.start()
+        elif self.cfg.can_usb:
+            from .can import usb_logger
+            self.can = usb_logger(self.cfg.can_usb, self.cfg.can_bitrate, self.cfg.can_listen_only,
+                                  self.cfg.can_channels)
             self.can.start()
         if self.cfg.gnss_raw or self.cfg.gnss_timemarks or self.cfg.gnss_interference:
             from .gnss_raw import UbxTap          # one raw tap: receiver log, time marks, RF state
@@ -259,6 +271,17 @@ class Rig:
         with self._flock:
             v = self._views[i]
         return as_image(*v) if v else None
+
+    def enable_usbcan(self, bitrate: int, port: str = "auto"):
+        """Start the USB-CAN-A logger now (GUI 'Use adapter'); saving it is the config's job."""
+        if self.session is not None:
+            raise RigError("cannot start CAN logging during a recording", "stop the recording first")
+        if self.can is None:
+            from .can import usb_logger
+            self.cfg.can_usb, self.cfg.can_bitrate = port, bitrate
+            self.can = usb_logger(port, bitrate, self.cfg.can_listen_only, self.cfg.can_channels)
+            self.can.start()
+        return self.can
 
     # --------------------------------------------------------------- frame sync
     def sync_modes(self, max_age: float = 1.0) -> list:

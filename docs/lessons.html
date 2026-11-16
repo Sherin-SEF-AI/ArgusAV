@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Engineering notes - Argus</title>
+<title>Engineering notes - Argus Labs</title>
 <meta name="description" content="What it took to make the rig work: the problems found, how they were fixed, and what is still unverified.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html" aria-current="page">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
@@ -32,7 +32,7 @@
   <dt>The deserializer board failed</dt>
   <dd>Both deserializers progressively stopped answering on their camera I²C buses over several days — a hardware fault that looked like a software regression. Reading the persistent kernel log across boots bounded when it started; the board was serviced.</dd>
   <dt>GNSS jammed by a USB 3 hub</dt>
-  <dd>Zero satellites with the antenna “OK”. The receiver's RF report showed a pinned-low AGC and a jamming indicator of 190/255: USB 3 SuperSpeed noise on the L1 band. Moving the receiver off the hub fixed it — and is why Argus now watches the receiver's RF report live.</dd>
+  <dd>Zero satellites with the antenna “OK”. The receiver's RF report showed a pinned-low AGC and a jamming indicator of 190/255: USB 3 SuperSpeed noise on the L1 band. Moving the receiver off the hub fixed it — and is why Argus Labs now watches the receiver's RF report live.</dd>
   <dt>The PPS line never fired</dt>
   <dd>The GNSS timepulse is configured and the host GPIO interrupt is armed, but no edge has ever arrived (wiring or pin-mux). Meanwhile <code>/dev/pps0</code> is the kernel's synthetic test source: binding to it would have produced perfect, fictitious sync. Absolute time comes from NTP until the GNSS clock is installed with a fix.</dd>
 </dl>
@@ -104,7 +104,7 @@
 </table></div>
 <div class="pager"><a href="troubleshooting.html"><small>Previous</small>Troubleshooting</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

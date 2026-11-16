@@ -146,7 +146,8 @@ def cmd_export(args) -> int:
     s = args.session
     if args.kind == "mcap":
         out = args.output or os.path.join(s, os.path.basename(os.path.normpath(s)) + ".mcap")
-        counts = export.export_mcap(s, out, progress, args.start, args.end, _cli().load_cfg(args))
+        counts = export.export_mcap(s, out, progress, args.start, args.end, _cli().load_cfg(args),
+                                    codec=args.codec)
         done_progress()
         print(f"{out}  ({os.path.getsize(out) / 1e9:.2f} GB)")
         for t, n in sorted(counts.items()):
@@ -420,8 +421,10 @@ def cmd_imu(args) -> int:
 
 
 def cmd_can(args) -> int:
-    from .can import CanLogger, operstate
     cfg = _cli().load_cfg(args)
+    if args.usb is not None or (cfg.can_usb and not args.ifaces):
+        return _can_usb(args, cfg)
+    from .can import CanLogger, operstate
     ifaces = args.ifaces.split(",") if args.ifaces else cfg.can_ifaces or ["can0", "can1"]
     print("interfaces: " + ", ".join(f"{i}={operstate(i)}" for i in ifaces))
     lg = CanLogger(ifaces)
@@ -432,6 +435,150 @@ def cmd_can(args) -> int:
         print(f"   {i}: {st['frames']} frames ({st['frames'] / args.seconds:.0f}/s), {st['errors']} error frames")
     if lg.err:
         print(f"   error: {lg.err}")
+    return 0
+
+
+def _can_listen(port: str, bitrate: int, seconds: float, mode: str = "silent") -> tuple[list, int]:
+    from .usbcan import UsbCan
+    dev = UsbCan(port, bitrate, mode)
+    frames, end = [], time.monotonic() + seconds
+    try:
+        while time.monotonic() < end:
+            t, _, fs = dev.read()
+            frames += [(t, f) for f in fs]
+        return frames, dev.parser.bad
+    finally:
+        dev.close()
+
+
+def _can_canalyst(args, cfg) -> int:
+    """CANalyst-II: bench test (desk only), bitrate scan (listen-only, once proven), or listen."""
+    from . import canalyst
+    from .util import InstanceLock
+    if not canalyst.present():
+        raise RigError(canalyst.diagnose())
+    lock = InstanceLock().acquire()          # the GUI / recorder owns the adapter while it runs
+    try:
+        bitrate = args.bitrate or cfg.can_bitrate
+        print("adapter CANalyst-II (USB 04d8:0053)")
+        if args.selftest:
+            if not args.yes:
+                print("The CANalyst-II bench test TRANSMITS. Run it only on the desk:\n"
+                      "   adapter NOT connected to a vehicle; CAN1 H to CAN2 H, CAN1 L to CAN2 L;\n"
+                      "   120 ohm termination ON for both channels.  Then add --yes.")
+                return 1
+            ok, lines = canalyst.bench_test(bitrate)
+            print("\n".join("   " + ln for ln in lines[:-1]) + "\n" + lines[-1])
+            return 0 if ok else 1
+        if args.scan and not canalyst.listen_only_proven():
+            raise RigError("listen-only mode is not proven on this adapter yet: a wrong bitrate in normal "
+                           "mode puts error frames on the vehicle bus",
+                           "avrig can --selftest --yes  (on the desk, CAN1 wired to CAN2)")
+        chans = [int(c) - 1 for c in cfg.can_channels.replace(" ", "").split(",")]
+        lg = canalyst.CanalystLogger(bitrate, chans, cfg.can_listen_only)
+        lg.start()
+        try:
+            if args.scan:
+                print("listening (listen-only) at each bitrate for 2 s - ignition must be ON")
+                res = []
+                for br in (500_000, 250_000, 125_000, 1_000_000, 100_000, 800_000, 200_000, 50_000):
+                    lg.set_bitrate(br)
+                    time.sleep(0.5)
+                    n0 = sum(st["frames"] for st in lg.stats.values())
+                    time.sleep(2.0)
+                    n = sum(st["frames"] for st in lg.stats.values()) - n0
+                    res.append((br, n))
+                    print(f"   {br // 1000:5d} kbit/s: {n:5d} frames, {len(lg.ids.table()):3d} ids"
+                          + (f"   ({lg.err})" if lg.err else ""))
+                best = max(res, key=lambda r: r[1])
+                if not best[1]:
+                    print("no traffic at any bitrate: ignition off, wiring, or the OBD port is gatewayed")
+                    return 1
+                print(f"-> {best[0]} bit/s. Set can_usb: auto and can_bitrate: {best[0]} in ~/.config/avrig.yaml")
+                return 0
+            mode = "listen-only" if cfg.can_listen_only else "NORMAL (acknowledges)"
+            print(f"listening ({mode}) at {bitrate // 1000} kbit/s on CAN{cfg.can_channels} for {args.seconds:g} s")
+            time.sleep(args.seconds)
+            if lg.err:
+                print(f"   error: {lg.err}")
+            rows = lg.ids.table()
+            total = sum(st["frames"] for st in lg.stats.values())
+            print(f"{total} frames ({total / args.seconds:.0f}/s), {len(rows)} ids")
+            if rows:
+                print(f"{'id':>10}  {'Hz':>6}  dlc  changing bytes  last data")
+            for r in rows:
+                n = len(r["data"])
+                chg = "".join("x" if r["changed"] >> i & 1 else "." for i in range(n))
+                print(f"{r['id']:>#10x}{'x' if r['ext'] else ' '} {r['count'] / args.seconds:6.1f}  {n:3d}  "
+                      f"{chg:14s}  {r['data'].hex(' ')}")
+            return 0
+        finally:
+            lg.stop()
+            lg.join(3)
+    finally:
+        lock.release()
+
+
+def _can_usb(args, cfg) -> int:
+    """USB adapters: CANalyst-II, or Waveshare USB-CAN-A (self-test, bitrate scan, per-ID summary)."""
+    from . import usbcan
+    from .can import usb_kind
+    if args.usb in ("canalyst", "auto", "") and usb_kind("auto" if args.usb in ("auto", "") else "canalyst") == "canalyst":
+        return _can_canalyst(args, cfg)
+    if args.usb is None and cfg.can_usb and usb_kind(cfg.can_usb) == "canalyst":
+        return _can_canalyst(args, cfg)
+    port = args.usb or (cfg.can_usb if cfg.can_usb not in ("", "auto") else None) or usbcan.find_port()
+    if not port:
+        raise RigError(f"no USB-CAN adapter: {usbcan.diagnose()}")
+    from .util import InstanceLock
+    lock = InstanceLock().acquire()          # the GUI / recorder owns the adapter while it runs
+    try:
+        return _can_usb_locked(args, cfg, port)
+    finally:
+        lock.release()
+
+
+def _can_usb_locked(args, cfg, port: str) -> int:
+    from . import usbcan
+    from .usbcan import SPEEDS
+    bitrate = args.bitrate or cfg.can_bitrate
+    print(f"adapter {port}")
+    if args.selftest:
+        ok, lines = usbcan.selftest(port, bitrate)
+        print("\n".join("   " + ln for ln in lines[:-1]) + "\n" + lines[-1])
+        return 0 if ok else 1
+    if args.scan:
+        order = [500_000, 250_000, 125_000, 1_000_000, 100_000, 800_000, 200_000, 50_000]
+        print("listening (silent: never transmits) at each bitrate for 2 s - ignition must be ON")
+        best = None
+        for br in order:
+            frames, bad = _can_listen(port, br, 2.0)
+            ids = len({(f["id"], f["ext"]) for _, f in frames})
+            print(f"   {br // 1000:5d} kbit/s: {len(frames):5d} frames, {ids:3d} ids, {bad:5d} bytes unparsed")
+            if frames and (best is None or len(frames) > best[1]):
+                best = (br, len(frames))
+        if best is None:
+            print("no traffic at any bitrate: ignition off, wrong pins, or the OBD port is gatewayed "
+                  "(answers diagnostic requests only)")
+            return 1
+        print(f"-> {best[0]} bit/s. Set can_bitrate: {best[0]} and can_usb: auto in ~/.config/avrig.yaml")
+        return 0
+    if bitrate not in SPEEDS:
+        raise RigError(f"bitrate {bitrate}: one of {sorted(SPEEDS)}")
+    print(f"listening (silent) at {bitrate // 1000} kbit/s for {args.seconds:g} s")
+    frames, bad = _can_listen(port, bitrate, args.seconds)
+    print(f"{len(frames)} frames ({len(frames) / args.seconds:.0f}/s), {bad} bytes unparsed")
+    by: dict = {}
+    for t, f in frames:
+        by.setdefault((f["id"], f["ext"]), []).append((t, f["data"]))
+    if by:
+        print(f"{'id':>10}  {'Hz':>6}  dlc  changing bytes  last data")
+    for (cid, ext), rows in sorted(by.items()):
+        data = [d for _, d in rows]
+        n = max(len(d) for d in data)
+        changing = "".join("x" if len({d[i] for d in data if len(d) > i}) > 1 else "." for i in range(n))
+        hz = (len(rows) - 1) / ((rows[-1][0] - rows[0][0]) / 1e9) if len(rows) > 1 and rows[-1][0] > rows[0][0] else 0
+        print(f"{cid:>#10x}{'x' if ext else ' '} {hz:6.1f}  {len(data[-1]):3d}  {changing:14s}  {data[-1].hex(' ')}")
     return 0
 
 
@@ -467,6 +614,8 @@ def register(sub):
     p.add_argument("--start", type=int, metavar="MONO_NS", help="mcap: clip start (session clock)")
     p.add_argument("--end", type=int, metavar="MONO_NS", help="mcap: clip end (session clock)")
     p.add_argument("--scale", type=float, default=1.0)
+    p.add_argument("--codec", choices=("h265", "h264"), default="h265",
+                   help="mcap: video codec; h264 re-encodes on the hardware for viewers without H.265")
     p.set_defaults(fn=cmd_export)
     p = sub.add_parser("soak", help="long recording + verify + report with load/thermal trend")
     p.add_argument("duration", help="e.g. 30m, 2h")
@@ -505,7 +654,15 @@ def register(sub):
     p.add_argument("--set", nargs=2, type=int, metavar=("FUNCTION", "LINE"))
     p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_imu)
-    p = sub.add_parser("can", help="CAN interfaces: state and frame rate")
+    p = sub.add_parser("can", help="CAN: SocketCAN interfaces, or the USB-CAN-A adapter (scan, self-test, IDs)")
     p.add_argument("--ifaces")
     p.add_argument("-t", "--seconds", type=float, default=5.0)
+    p.add_argument("--usb", nargs="?", const="", help="use a USB adapter: auto (default), canalyst, "
+                                                         "waveshare or a serial port")
+    p.add_argument("--bitrate", type=int, help="CAN bitrate (default: can_bitrate from the config)")
+    p.add_argument("--scan", action="store_true", help="USB adapter: find the bus bitrate (listen-only)")
+    p.add_argument("--selftest", action="store_true",
+                   help="USB-CAN-A: internal loopback (nothing reaches the bus). CANalyst-II: desk test with "
+                        "CAN1 wired to CAN2, proves listen-only (transmits: needs --yes, never on a vehicle)")
+    p.add_argument("--yes", action="store_true", help="confirm the CANalyst-II bench test (desk only)")
     p.set_defaults(fn=cmd_can)

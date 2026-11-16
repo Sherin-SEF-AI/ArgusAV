@@ -67,6 +67,11 @@ MODELS = {
     "clip_text": dict(url=_HF_CLIP + "onnx/text_model.onnx",
                       sha256="3f6571f5bad13a97c469c1622e1cfc4d9aef78b79fdbfcff804ca357bfada8cc",
                       licence="MIT (OpenAI CLIP ViT-B/32, ONNX by Xenova)", trtexec=["--shapes=input_ids:1x77"]),
+    "textdet": dict(url="https://huggingface.co/SWHL/RapidOCR/resolve/1cfba2e90fc938db55889873735088de210cc173/"
+                        "PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+                    sha256="d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+                    licence="Apache-2.0 (PaddleOCR PP-OCRv4 mobile text detection, ONNX by RapidOCR)",
+                    trtexec=["--shapes=x:1x3x640x640"]),
     "depth": dict(url="https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/"
                       "4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model.onnx",
                   sha256="afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c",
@@ -259,6 +264,46 @@ def _tiled(fn, bgr: np.ndarray, tiles: int, overlap: float = 0.12) -> list:
     boxes = np.array([d[1:5] for d in res])
     keep = nms(boxes, np.array([d[0] for d in res]), 0.4)
     return [res[i] for i in keep]
+
+
+# --------------------------------------------------------------------- text
+class TextDetector:
+    """PP-OCRv4 text detection (DB). For text the plate detector does not know: registration
+    numbers painted on truck and bus bodies (2026-11-14 road session: a number on a cargo
+    door stayed readable after plate blurring). Input: a BGR crop of any size, letterboxed
+    into 640 x 640. Output: [(score, x1, y1, x2, y2)] in crop pixels."""
+    SIZE = 640
+    MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+    STD = np.array([0.229, 0.224, 0.225], np.float32)
+
+    def __init__(self, conf: float = 0.4, bin_thresh: float = 0.3):
+        self.e = _engine("textdet", {"x": (1, 3, self.SIZE, self.SIZE)})
+        self.conf, self.bin = conf, bin_thresh
+
+    def __call__(self, bgr: np.ndarray) -> list:
+        import cv2
+        h, w = bgr.shape[:2]
+        if h < 8 or w < 8:
+            return []
+        r = self.SIZE / max(h, w)
+        nw, nh = max(1, int(w * r)), max(1, int(h * r))
+        canvas = np.zeros((self.SIZE, self.SIZE, 3), np.float32)
+        canvas[:nh, :nw] = (cv2.resize(bgr, (nw, nh))[:, :, ::-1].astype(np.float32) / 255.0 - self.MEAN) / self.STD
+        out = self.e.infer(x=canvas.transpose(2, 0, 1)[None])
+        prob = next(iter(out.values()))[0, 0][:nh, :nw]
+        cs, _ = cv2.findContours((prob > self.bin).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        res = []
+        for c in cs:
+            x, y, bw, bh = cv2.boundingRect(c)
+            if bw * bh < 6:
+                continue
+            score = float(prob[y:y + bh, x:x + bw].mean())
+            if score < self.conf:
+                continue
+            g = 0.5 * bh                                  # DB shrinks text boxes: grow back
+            res.append((score, max(0.0, (x - g) / r), max(0.0, (y - g) / r),
+                        min(float(w), (x + bw + g) / r), min(float(h), (y + bh + g) / r)))
+        return res
 
 
 # -------------------------------------------------------------------- faces

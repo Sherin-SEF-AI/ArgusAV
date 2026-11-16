@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Argus desktop shortcut and app-menu entry for the current user (no root needed).
+# Argus Labs desktop shortcut and app-menu entry for the current user (no root needed).
 #   bash setup/install-desktop.sh            install
 #   bash setup/install-desktop.sh --remove   remove
 set -euo pipefail
@@ -19,15 +19,15 @@ cp "$ROOT/avrig/assets/argus.svg" "$ICONS/argus.svg"
 cat > "$APPS/argus.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Argus
-GenericName=AV data collection
+Name=Argus Labs
+GenericName=AV research data collection
 Comment=Six-camera hardware-synced data collection rig (avrig gui)
 Exec=$ROOT/bin/argus-launch
 Icon=argus
 Terminal=false
 Categories=Science;Engineering;
 Keywords=camera;rig;recording;GMSL;IMU;GNSS;data collection;
-StartupWMClass=Argus
+StartupWMClass=Argus Labs
 StartupNotify=true
 DESKTOP
 cp "$APPS/argus.desktop" "$DESK/argus.desktop"

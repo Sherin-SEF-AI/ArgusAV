@@ -42,7 +42,7 @@ RANGES = {
     "depot_prune_days": (0.0, 3650.0),
     "vehicle_ground_z_m": (-3.0, 3.0), "foxglove_port": (1024, 65535), "mount_guard_deg": (0.3, 10.0), "mount_guard_fps": (1.0, 10.0), "mount_guard_rate_hz": (0.5, 20.0),
 }
-LIST_KEYS = ("marker_labels", "can_ifaces", "fleet_rigs")
+LIST_KEYS = ("marker_labels", "can_ifaces", "fleet_rigs", "library_dirs")
 VECTOR_KEYS = {"imu_mount_rpy_deg": 3, "gnss_lever_arm_m": 3, "ref_camera_pose": 6}   # float lists
 
 
@@ -89,6 +89,12 @@ class Config:
     mount_guard_deg: float = 1.0
     mount_guard_fps: float = 4.0        # analysis frames per camera (640x512 grey, leaky)
     mount_guard_rate_hz: float = 4.0    # global cap on analysed pairs (CPU bound)
+    # privacy: own-vehicle mask for `avrig anonymize` ({camera: [[x, y], ...]} as frame fractions;
+    # check it with `avrig egomask SESSION`). Empty = no mask unless --ego-mask is given.
+    ego_mask_path: str = ""
+    # research library: more folders of sessions to show in the Lab overview, the pipeline and
+    # the Python API (e.g. an offload disk, or rigcap's folder). Never pruned or offloaded.
+    library_dirs: list = field(default_factory=list)
     # operator workflow
     marker_labels: list = field(default_factory=lambda: ["interesting", "bad data",
                                                          "near miss", "note"])
@@ -115,6 +121,13 @@ class Config:
     collection_mode: bool = False
     # phase 4 (hardware-dependent)
     can_ifaces: list = field(default_factory=list)   # e.g. ["can0"]; bitrate set by setup
+    # USB CAN adapter: "" = not used; "auto" = whichever is plugged in; "canalyst" (CANalyst-II);
+    # "waveshare" or a serial port ("/dev/usbcan0") for the Waveshare USB-CAN-A.
+    # Listen-only by default: the adapter never transmits or acknowledges on the vehicle bus.
+    can_usb: str = ""
+    can_bitrate: int = 500000
+    can_listen_only: bool = True
+    can_channels: str = "1"             # CANalyst-II: "1", "2" or "1,2" (CAN1 / CAN2 on the box)
     gnss_timemarks: bool = False        # log UBX-TIM-TM2 (camera trigger on F9P EXTINT)
     # GNSS ground truth: raw receiver log for PPK (gnss_raw.ubx; `avrig gnss --raw-enable`
     # once per power cycle) and live RTK corrections from an NTRIP caster
@@ -170,7 +183,7 @@ class Config:
             if not isinstance(data, dict):
                 raise ConfigError(f"{p}: top level must be a mapping")
             cfg.update(data, source=p)
-        for key in ("out_dir", "presets_path", "calibration_dir"):
+        for key in ("out_dir", "presets_path", "calibration_dir", "ego_mask_path"):
             setattr(cfg, key, os.path.expanduser(getattr(cfg, key)))
         cfg.validate()
         return cfg
@@ -232,6 +245,15 @@ class Config:
         bad = [i for i in self.can_ifaces if not re.fullmatch(r"v?can[0-9]+", i)]
         if bad:
             raise ConfigError(f"can_ifaces: invalid interface name(s) {bad}")
+        if self.can_usb:
+            from .can import usb_bitrates
+            ok = usb_bitrates(self.can_usb)
+            if self.can_bitrate not in ok:
+                raise ConfigError(f"can_bitrate {self.can_bitrate}: one of {sorted(ok)}")
+            if not re.fullmatch(r"[12](,[12])?", self.can_channels.replace(" ", "")):
+                raise ConfigError(f"can_channels {self.can_channels!r}: \"1\", \"2\" or \"1,2\"")
+            if self.can_ifaces:
+                raise ConfigError("use either can_ifaces (SocketCAN) or can_usb (USB-CAN-A), not both")
         if self.ntrip_url:
             from .ntrip import parse_url
             parse_url(self.ntrip_url)

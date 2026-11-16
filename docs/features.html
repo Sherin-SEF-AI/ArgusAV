@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Operator features - Argus</title>
+<title>Operator features - Argus Labs</title>
 <meta name="description" content="The operator application, live guards, markers, the phone page, QA, offload, replay and export.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="img/argus.svg" type="image/svg+xml">
@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="top"><div class="top-inner">
-<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus</a>
+<a class="brand" href="index.html"><img src="img/argus.svg" alt="" width="32" height="32">Argus Labs</a>
 <nav class="site" aria-label="Documentation"><a href="index.html">Overview</a><a href="getting-started.html">Get started</a><a href="how-it-works.html">How it works</a><a href="features.html" aria-current="page">Operator</a><a href="lab.html">AV lab</a><a href="performance.html">Performance</a><a href="cli.html">Commands</a><a href="troubleshooting.html">Troubleshooting</a><a href="lessons.html">Eng. notes</a></nav>
 <a class="gh" href="https://github.com/Sherin-SEF-AI/ArgusAV">GitHub</a>
 </div></header>
@@ -20,7 +20,7 @@
 <p class="lead">Everything a data-collection crew uses on the road and at the depot: the operator window, live guards, markers, the phone page, verification and reports, offload, replay and export.</p>
 
 <h2 id="the-operator-window">The operator window</h2>
-<figure class="shot"><img src="img/main.png" alt="Argus operator window with six camera previews, the chip bar and recording controls" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Operator window: six live previews, the chip bar, recording controls, markers, and the per-camera sync table. People in the camera images are pixelated for publication.</figcaption></figure>
+<figure class="shot"><img src="img/main.png" alt="Argus Labs operator window with six camera previews, the chip bar and recording controls" loading="lazy" onerror="this.parentNode.remove()"><figcaption>Operator window: six live previews, the chip bar, recording controls, markers, and the per-camera sync table. People in the camera images are pixelated for publication.</figcaption></figure>
 <p>The chip bar turns the health model into one glance. Each chip is green, amber or red; clicking ISSUES opens the list of health rules behind them.</p>
 <div class="table"><table>
 <tr><th>Chip</th><th>Shows</th></tr>
@@ -69,7 +69,7 @@ avrig mount check SESSION        <span class="c"># run the guard over a recorded
 <p><code>avrig calib register FILE --name N --activate</code> stores an immutable, hashed copy of a calibration, and every session records the active id. Health warns when there is none, when it is older than <code>calib_max_age_days</code>, or when the last check found a moved camera. <code>calib reference</code> (in the calibration bay, right after calibrating) and <code>calib check</code> (same bay, later) compare ORB features to detect a camera that moved — a real-scene test read 0.0 px on all six unchanged views and 5.98 px for a simulated 6 px bump.</p>
 
 <h2 id="phone-page-and-remote-status">Phone page and remote status</h2>
-<figure class="shot narrow"><img src="img/phone.png" alt="Argus status page on a phone" loading="lazy" onerror="this.parentNode.remove()"><figcaption>The phone page: health, sync, recording, guards and camera thumbnails. People in the camera images are pixelated for publication.</figcaption></figure>
+<figure class="shot narrow"><img src="img/phone.png" alt="Argus Labs status page on a phone" loading="lazy" onerror="this.parentNode.remove()"><figcaption>The phone page: health, sync, recording, guards and camera thumbnails. People in the camera images are pixelated for publication.</figcaption></figure>
 <p><code>avrig gui --remote</code> (or <code>remote_enable: true</code>) serves a status page on the LAN: <code>/</code>, <code>/api/status</code>, <code>/api/health</code> and <code>/thumb/&lt;cam&gt;.jpg</code>. Thumbnails and status are at most one per second. With <code>remote_token</code>, requests need <code>?token=</code> or the <code>X-Avrig-Token</code> header. With <code>remote_markers: true</code> <em>and</em> a token, the page shows big marker buttons for a co-driver (configured labels only). There are no other write endpoints: nothing remote can start, stop or reconfigure the rig.</p>
 
 <h2 id="quality-assurance">Quality assurance</h2>
@@ -113,7 +113,7 @@ avrig mount check SESSION        <span class="c"># run the guard over a recorded
 <p>With the root helper installed and <code>collection_mode: true</code>, a recording saves the clocks and runs <code>jetson_clocks</code>, pauses the Docker containers and stops the services listed in <code>/etc/avrig/collection-mode.conf</code>, and restores exactly what it changed when the recording stops. Nothing is listed by default — during the measurements one monitoring container alone used ~125 % of one core.</p>
 <div class="pager"><a href="how-it-works.html"><small>Previous</small>How it works</a><a class="next" href="lab.html"><small>Next</small>AV lab</a></div></article></div></main>
 <footer><div class="inner">
-<span>Argus - internal data-collection rig software. The command is <code>avrig</code>.</span>
+<span>Argus Labs - internal data-collection rig software. The command is <code>avrig</code>.</span>
 <span><a href="https://github.com/Sherin-SEF-AI/ArgusAV">Source on GitHub</a></span>
 </div></footer>
 </body>

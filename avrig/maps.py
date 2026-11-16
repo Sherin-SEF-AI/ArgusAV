@@ -353,7 +353,7 @@ def html(path: str, db_path: str = DB) -> str:
     ch = changes(db_path)
     data = json.dumps(dict(cells=cs, bumps=bumps, landmarks=lms, changes=ch))
     page = f"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Argus maps</title><link rel=stylesheet href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<title>Argus Labs maps</title><link rel=stylesheet href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>body{{font:14px system-ui;margin:0;background:#fff;color:#222}}header{{padding:10px 16px}}#map{{height:70vh;background:#eee}}
 .lg i{{display:inline-block;width:10px;height:10px;border-radius:50%;margin:0 4px 0 12px}}ul{{margin:8px 16px}}
 @media(prefers-color-scheme:dark){{body{{background:#151515;color:#ddd}}#map{{background:#222}}}}</style>
