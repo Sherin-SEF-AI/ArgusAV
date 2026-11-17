@@ -158,16 +158,35 @@ class Capture:
     timestamp (SoC TSC epoch). seq is the driver's counter of *delivered* buffers: on this
     driver it does not advance for frames missed for lack of a free buffer, so drops are
     detected from timestamp gaps, not from seq.
+
+    `nbuf` is how many frames the DRIVER can hold while this process is not reading. The
+    frames are stamped by the driver, so a late read costs nothing - but once every buffer
+    is full the driver drops. With 6 buffers a 0.2 s pause of the interpreter lost frames
+    on all cameras (road sessions 2026-11-14: ~0.5 s pause, 10-17 frames each); 32 hold a
+    full second. If the driver does not grant the deep queue, the proven 6 are used.
     """
 
-    def __init__(self, dev: str, width: int, height: int, pixfmt: str = "UYVY", nbuf: int = 6):
+    SAFE_NBUF = 6
+
+    def __init__(self, dev: str, width: int, height: int, pixfmt: str = "UYVY", nbuf: int = SAFE_NBUF):
         self.dev, self.width, self.height, self.pixfmt, self.nbuf = dev, width, height, pixfmt, nbuf
+        self.count = 0                  # buffers actually granted
         self.fd = -1
         self.maps: list = []
         self.addrs: list = []
         self.streaming = False
 
     def open(self):
+        try:
+            self._open(self.nbuf)
+        except OSError as e:
+            if self.nbuf <= self.SAFE_NBUF or e.errno in (errno.EBUSY, errno.ENODEV, errno.ENOENT):
+                raise
+            log.warning("%s: no %d-frame capture queue (%s); using %d", self.dev, self.nbuf,
+                        e.strerror or e, self.SAFE_NBUF)
+            self._open(self.SAFE_NBUF)
+
+    def _open(self, nbuf: int):
         self.fd = os.open(self.dev, os.O_RDWR | os.O_NONBLOCK)
         try:
             f = v4l2_format(type=V4L2_BUF_TYPE_VIDEO_CAPTURE)
@@ -178,9 +197,13 @@ class Capture:
                 raise OSError(errno.EINVAL, f"driver set {f.fmt.pix.width}x{f.fmt.pix.height}, "
                                             f"not {self.width}x{self.height}")
             self.frame_bytes = f.fmt.pix.sizeimage
-            req = v4l2_requestbuffers(count=self.nbuf, type=V4L2_BUF_TYPE_VIDEO_CAPTURE,
+            req = v4l2_requestbuffers(count=nbuf, type=V4L2_BUF_TYPE_VIDEO_CAPTURE,
                                       memory=V4L2_MEMORY_MMAP)
             fcntl.ioctl(self.fd, VIDIOC_REQBUFS, req)
+            if nbuf > self.SAFE_NBUF and req.count < nbuf:
+                # A partial deep queue would take memory the other cameras need: all or the safe size.
+                raise OSError(errno.ENOMEM, f"driver granted {req.count} of {nbuf} buffers")
+            self.count = req.count
             for i in range(req.count):
                 b = v4l2_buffer(index=i, type=V4L2_BUF_TYPE_VIDEO_CAPTURE, memory=V4L2_MEMORY_MMAP)
                 fcntl.ioctl(self.fd, VIDIOC_QUERYBUF, b)

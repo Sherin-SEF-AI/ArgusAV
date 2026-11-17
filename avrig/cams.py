@@ -143,6 +143,7 @@ class CamStream:
         self.on_mount = on_mount            # (idx, mono_ns, grey bytes, w, h) while recording
         self.pipe = None
         self.cap: Capture | None = None
+        self.buffers: int | None = None     # driver frame queue granted at the last start
         self.state = "stopped"          # stopped | starting | running | failed
         self.error: str | None = None
         self.hint = ""
@@ -257,12 +258,12 @@ class CamStream:
             self._fail(self.error or "pipeline failed to start")
         self._base = pipe.get_base_time()
         if not sim:
-            cap = Capture(self.cam.dev, self.cfg.width, self.cfg.height)
+            cap = Capture(self.cam.dev, self.cfg.width, self.cfg.height, nbuf=self.cfg.capture_buffers)
             try:
                 cap.open()
             except OSError as e:
                 self._fail(f"{self.cam.dev}: {e.strerror or e}", busy=e.errno == errno.EBUSY)
-            self.cap, self._cap_run = cap, True
+            self.cap, self._cap_run, self.buffers = cap, True, cap.count
             self._thread = threading.Thread(target=self._capture, args=(cap, pipe), daemon=True,
                                             name=f"cap-{self.cam.id}"[:15])
             self._thread.start()

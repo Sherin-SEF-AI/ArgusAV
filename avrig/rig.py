@@ -83,6 +83,7 @@ class Rig:
         self._calib = (0.0, None)
         self._top: list = []
         self._started = False
+        self.pauses = [0, 0.0]             # this recording: pauses of the interpreter (count, worst s)
 
     # ---------------------------------------------------------------- lifecycle
     def start(self):
@@ -137,6 +138,7 @@ class Rig:
             self.perf_available = perf.available()
         self._poll_host()
         threading.Thread(target=self._supervise, daemon=True, name="supervisor").start()
+        threading.Thread(target=self._pause_watch, daemon=True, name="pausewatch").start()
         log.info("rig: %d cameras %s, IMU %s, gpsd %s:%d%s", len(self.cams),
                  [c.id for c in self.cams], self.cfg.imu_dev, self.cfg.gpsd_host,
                  self.cfg.gpsd_port, " [SIM]" if self.cfg.sim else "")
@@ -367,6 +369,7 @@ class Rig:
             self._rec = dict(sync_modes=self.sync_modes(0), forced=bool(blocking and force),
                              preflight=[i.as_dict() for i in issues])
             self._verdicts = Counter()
+            self.pauses = [0, 0.0]
             self.session, self.last_abort = s, None
             for i in issues:
                 s.event(f"preflight {i.level} [{i.component}] {i.msg}",
@@ -590,6 +593,8 @@ class Rig:
             can=snap["can"], timemarks=snap["timemarks"], gnss_raw=snap["gnss_raw"], ntrip=snap["ntrip"],
             auto_events=dict(Counter(m["label"] for m in s.markers if m["source"] == "auto")),
             mount_guard=snap.get("mount"), gnss_rf=snap.get("gnss_rf"),
+            app_pauses=dict(count=self.pauses[0], worst_ms=round(self.pauses[1] * 1000)),
+            capture_buffers=[st.buffers for st in self.streams],
             system_clock=snap["chrony"], timebase=TIMEBASE,
             timing=dict(camera_source="driver TSC timestamp via direct V4L2 capture"
                         if not self.cfg.sim else "simulated", **self.tsc.state()))
@@ -609,6 +614,32 @@ class Rig:
                 self._tick()
             except Exception:  # the supervisor must never die
                 log.exception("supervisor tick failed")
+
+    PAUSE_STEP, PAUSE_MIN = 0.05, 0.15
+
+    def _pause_watch(self):
+        """Notice when Python stops running (interpreter lock held by one thread, or no CPU).
+
+        The capture threads need the interpreter for a moment per frame; while it is held
+        the driver keeps the frames (capture_buffers deep) and loses them only when that
+        queue is full. Each pause over 150 ms during a recording goes to events.log with
+        its length, so a gap in the frames can be traced instead of guessed at. Cost: one
+        wake-up every 50 ms."""
+        last, t_evt = time.monotonic(), 0.0
+        while not self._stop.wait(self.PAUSE_STEP):
+            now = time.monotonic()
+            late, last = now - last - self.PAUSE_STEP, now
+            if late < self.PAUSE_MIN or not self.session:
+                continue
+            self.pauses[0] += 1
+            self.pauses[1] = max(self.pauses[1], late)
+            if now - t_evt >= 5.0:                          # never let the log become load
+                t_evt = now
+                held = self.cfg.capture_buffers / max(1, self.cfg.fps)
+                self.event(f"application paused for {late * 1000:.0f} ms"
+                           + (" - frames kept by the driver queue" if late < held * 0.8 else
+                              f" - longer than the driver queue ({held:.1f} s): frames may be lost"),
+                           logging.WARNING)
 
     def _session_logs(self, s: Session, now: float):
         self._drain_events(s)

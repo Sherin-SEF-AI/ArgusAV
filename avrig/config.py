@@ -27,7 +27,7 @@ CAMERAS = {
 
 # key -> (min, max) for numeric fields
 RANGES = {
-    "width": (64, 8192), "height": (64, 8192), "fps": (1, 60),
+    "width": (64, 8192), "height": (64, 8192), "fps": (1, 60), "capture_buffers": (4, 32),
     "bitrate": (1_000_000, 100_000_000), "segment_s": (10, 3600),
     "preview_w": (64, 1920), "preview_h": (64, 1536), "preview_fps": (1, 30),
     "imu_baud": (9600, 4_000_000), "gpsd_port": (1, 65535), "gnss_latency_ms": (-500, 500),
@@ -52,6 +52,7 @@ class Config:
     width: int = 1920
     height: int = 1536
     fps: int = 30                       # FSIN readout-trigger sync is supported at 30 only
+    capture_buffers: int = 32           # frames the driver holds per camera while the app is busy (32 = 1 s)
     bitrate: int = 20_000_000           # per camera, H.265
     segment_s: int = 300                # keyframe-aligned mkv segments, no frame gaps
     preview_w: int = 320
